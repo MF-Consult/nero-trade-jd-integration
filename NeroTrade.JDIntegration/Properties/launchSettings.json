@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "NeroTrade.JDIntegration": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 8000",
+      "launchBrowser": false
+    }
+  }
+}
