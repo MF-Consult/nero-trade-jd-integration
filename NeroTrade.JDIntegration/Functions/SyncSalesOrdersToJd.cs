@@ -45,7 +45,6 @@ public sealed class SyncSalesOrdersToJd
 
         var inventories = await _jd.GetInventoriesAsync(cts.Token);
         var inventory = inventories.FirstOrDefault();
-        var requestOrders = await _jd.GetRequestOrdersAsync(inventory.id.Value, cts.Token);
         if (inventory == null || inventory.id == null)
         {
             _logger.LogWarning("No inventories available in JD");

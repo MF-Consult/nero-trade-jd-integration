@@ -91,10 +91,23 @@ public class SyncRequestOrderStatusToUniconta
                     continue;
                 }
 
-                // Check if we have a mapping for this status
-                if (!_config.JdStatusToUnicontaGroup.TryGetValue(jdOrder.status.Value, out var targetGroup))
+                // Determine target group: Stage has priority over Status
+                string? targetGroup = null;
+                string mappingSource = "Status";
+
+                if (jdOrder.stage.HasValue && _config.JdStageToUnicontaGroup.TryGetValue(jdOrder.stage.Value, out var stageGroup))
                 {
-                    // No mapping for this status, skip
+                    targetGroup = stageGroup;
+                    mappingSource = "Stage";
+                }
+                else if (jdOrder.status.HasValue && _config.JdStatusToUnicontaGroup.TryGetValue(jdOrder.status.Value, out var statusGroup))
+                {
+                    targetGroup = statusGroup;
+                }
+
+                if (targetGroup == null)
+                {
+                    // No mapping found for this status/stage, skip
                     continue;
                 }
 
@@ -106,8 +119,8 @@ public class SyncRequestOrderStatusToUniconta
                 }
 
                 // Perform Update
-                _logger.LogInformation("Updating Order {OrderNumber}: Status {JdStatus} -> Group '{TargetGroup}' (was '{CurrentGroup}')", 
-                    orderNumber, jdOrder.status, targetGroup, currentGroup);
+                _logger.LogInformation("Updating Order {OrderNumber}: {Source} (Status:{JdStatus}, Stage:{JdStage}) -> Group '{TargetGroup}' (was '{CurrentGroup}')", 
+                    orderNumber, mappingSource, jdOrder.status, jdOrder.stage, targetGroup, currentGroup);
 
                 var success = await _uniconta.UpdateSalesOrderGroupAsync(orderNumber, targetGroup, token);
                 if (success)
