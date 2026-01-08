@@ -35,6 +35,9 @@ public sealed class LocalSalesOrder
     public DateTime? DeliveryTime { get; init; }
     public string? CarrierMessage { get; init; }
 
+    // Status mapping
+    public string? Group { get; init; }
+
     public List<LocalSalesOrderLine> Lines { get; init; } = new();
 }
 

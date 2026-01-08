@@ -24,6 +24,9 @@ builder.Services
 builder.Services.Configure<JdSettings>(builder.Configuration.GetSection("JD"));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<JdSettings>>().Value);
 
+// Status Mapping Config
+builder.Services.Configure<StatusMappingConfig>(builder.Configuration.GetSection("StatusMapping"));
+
 // Typed HttpClient + repositories for JD
 builder.Services.AddHttpClient<IJdRepository, JdRepository>();
 builder.Services.AddScoped<IJdLogisticsService, JdLogisticsService>();

@@ -73,6 +73,19 @@ public sealed class UnicontaService(IUnicontaRepository repo) : IUnicontaService
             yield return item;
     }
 
+    public async IAsyncEnumerable<LocalSalesOrder> ReadSalesOrdersWithGroupAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var order in repo.ReadSalesOrdersWithGroupAsync(cancellationToken))
+        {
+            yield return order;
+        }
+    }
+
+    public Task<bool> UpdateSalesOrderGroupAsync(int orderNumber, string group, CancellationToken cancellationToken)
+    {
+        return repo.UpdateSalesOrderGroupAsync(orderNumber, group, cancellationToken);
+    }
+
     public async IAsyncEnumerable<DebtorDeliveryNoteInfo> ReadDebtorDeliveryNotesAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await foreach (var note in repo.ReadDebtorDeliveryNotesAsync(cancellationToken))

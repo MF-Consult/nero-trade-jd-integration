@@ -3,14 +3,12 @@ namespace NeroTrade.JDIntegration.Services.ExternalIntegration;
 using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Models.ExternalIntegration;
 using Repositories;
-using System.Text.RegularExpressions;
 
 public sealed class JdLogisticsService(
     IJdRepository repository,
     ILogger<JdLogisticsService> logger)
     : IJdLogisticsService
 {
-    private static readonly Regex ShopOrderRegex = new(@"SO\s+([A-Za-z0-9\-]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private readonly ILogger<JdLogisticsService> _logger = logger;
     private Dictionary<string, JdAddress>? _existingByAtt;
     private Dictionary<string, JdCatalogItem>? _existingItemsBySku;
@@ -163,7 +161,7 @@ public sealed class JdLogisticsService(
     {
         // Build existing map keyed by shop order identifier
         var existing = (await repository.GetRequestOrdersAsync(inventoryId, cancellationToken))
-            .Select(r => new { Order = r, Key = GetShopOrderKey(r.shopOrderId, r.text) })
+            .Select(r => new { Order = r, Key = JdOrderHelper.GetOrderNumberString(r.shopOrderId, r.text) })
             .Where(x => !string.IsNullOrWhiteSpace(x.Key))
             .GroupBy(x => x.Key!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First().Order, StringComparer.OrdinalIgnoreCase);
@@ -171,7 +169,7 @@ public sealed class JdLogisticsService(
         var result = new UpsertResult<JdRequestOrderCreate>();
         foreach (var order in orders)
         {
-            var key = GetShopOrderKey(order.shopOrderId, order.text);
+            var key = JdOrderHelper.GetOrderNumberString(order.shopOrderId, order.text);
             if (string.IsNullOrWhiteSpace(key))
             {
                 result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, 0, "Missing shop order identifier"));
@@ -209,27 +207,8 @@ public sealed class JdLogisticsService(
         }
         return result;
     }
-
-    private static string? GetShopOrderKey(string? shopOrderId, string? text)
-    {
-        if (!string.IsNullOrWhiteSpace(shopOrderId))
-        {
-            return shopOrderId.Trim();
-        }
-
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return null;
-        }
-
-        var match = ShopOrderRegex.Match(text);
-        if (match.Success)
-        {
-            return match.Groups[1].Value.Trim();
-        }
-
-        return null;
-    }
+    
+    // GetShopOrderKey method removed in favor of JdOrderHelper.GetOrderNumberString
 
     /// <summary>
     /// Determines if a request order needs to be deleted and recreated due to significant changes.

@@ -172,6 +172,60 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
 
         yield break; // Return empty collection
     }
+
+    public async IAsyncEnumerable<LocalSalesOrder> ReadSalesOrdersWithGroupAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var queryApi = await connectionManager.CreateQueryApiAsync();
+        // Fetch all orders - we need to scan them to match with JD
+        var orders = await queryApi.Query<DebtorOrderClient>((IEnumerable<PropValuePair>?)null);
+        
+        foreach (var o in orders)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return new LocalSalesOrder
+            {
+                OrderNumber = o.OrderNumber,
+                Group = o.Group,
+                // Minimal fields required for matching
+            };
+        }
+    }
+
+    public async Task<bool> UpdateSalesOrderGroupAsync(int orderNumber, string group, CancellationToken cancellationToken)
+    {
+        var queryApi = await connectionManager.CreateQueryApiAsync();
+        var crudApi = await connectionManager.CreateCrudApiAsync();
+
+        // 1. Find the order
+        var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), orderNumber.ToString()) };
+        var orders = await queryApi.Query<DebtorOrderClient>(filter);
+        var order = orders.FirstOrDefault();
+
+        if (order == null)
+        {
+            _logger.LogWarning("Could not find sales order {OrderNumber} in Uniconta for status update", orderNumber);
+            return false;
+        }
+
+        // 2. Update the group
+        // If the group is the same, we don't need to update, but the logic calling this should handle that check.
+        // However, checking again is safe.
+        if (string.Equals(order.Group, group, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        order.Group = group;
+        var result = await crudApi.Update(order);
+
+        if (result != ErrorCodes.Succes)
+        {
+            _logger.LogError("Failed to update status group for order {OrderNumber}. Uniconta Error: {Error}", orderNumber, result);
+            return false;
+        }
+
+        return true;
+    }
 }
 
 

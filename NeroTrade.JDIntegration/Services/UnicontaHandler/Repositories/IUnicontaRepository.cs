@@ -8,6 +8,10 @@ public interface IUnicontaRepository
     IAsyncEnumerable<LocalInventoryItem> ReadAllItemsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<LocalPurchaseOrder> ReadAllPurchaseOrdersAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<LocalSalesOrder> ReadAllSalesOrdersAsync(CancellationToken cancellationToken);
+    
+    // Status Sync
+    IAsyncEnumerable<LocalSalesOrder> ReadSalesOrdersWithGroupAsync(CancellationToken cancellationToken);
+    Task<bool> UpdateSalesOrderGroupAsync(int orderNumber, string group, CancellationToken cancellationToken);
 
     // File operations - get delivery notes for debtors
     IAsyncEnumerable<DebtorDeliveryNoteInfo> ReadDebtorDeliveryNotesAsync(CancellationToken cancellationToken);
