@@ -6,34 +6,25 @@ using NeroTrade.JDIntegration.Services.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
 
-public sealed class SyncItemsToJd
+public sealed class SyncItemsToJd(
+    IUnicontaService uniconta,
+    ItemMapper mapper,
+    IJdLogisticsService jd,
+    ILogger<SyncItemsToJd> logger)
 {
-    private readonly IUnicontaService _uniconta;
-    private readonly ItemMapper _mapper;
-    private readonly IJdLogisticsService _jd;
-    private readonly ILogger<SyncItemsToJd> _logger;
-
-    public SyncItemsToJd(IUnicontaService uniconta, ItemMapper mapper, IJdLogisticsService jd, ILogger<SyncItemsToJd> logger)
-    {
-        _uniconta = uniconta;
-        _mapper = mapper;
-        _jd = jd;
-        _logger = logger;
-    }
-
     [Function("SyncItemsToJd")]
     public async Task RunAsync([HttpTrigger(AuthorizationLevel.Function, "get", Route = "sync-items-to-jd")] HttpRequestData req)
     {
         var correlationId = Guid.NewGuid().ToString("N");
         using var cts = new CancellationTokenSource();
-        using var scope = _logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
-        _logger.LogInformation("SyncItemsToJd started");
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
+        logger.LogInformation("SyncItemsToJd started");
 
         var batch = new List<JdCatalogItem>(capacity: 200);
         int total = 0;
-        await foreach (var item in _uniconta.ReadItemsBatchedAsync(200, cts.Token))
+        await foreach (var item in uniconta.ReadItemsBatchedAsync(200, cts.Token))
         {
-            var jdItem = _mapper.Map(item);
+            var jdItem = mapper.Map(item);
             if (string.IsNullOrWhiteSpace(jdItem.sku)) continue;
             batch.Add(jdItem);
             if (batch.Count >= 200)
@@ -50,17 +41,17 @@ public sealed class SyncItemsToJd
             batch.Clear();
         }
 
-        _logger.LogInformation("SyncItemsToJd completed. TotalPrepared={Total}", total);
+        logger.LogInformation("SyncItemsToJd completed. TotalPrepared={Total}", total);
     }
 
     private async Task HandleBatchAsync(List<JdCatalogItem> batch, CancellationToken ct)
     {
-        var result = await _jd.UpsertItemsAsync(batch, ct);
+        var result = await jd.UpsertItemsAsync(batch, ct);
         if (result.Failures.Count > 0)
         {
             var sample = string.Join(", ", result.Failures.Take(5).Select(f => $"{f.Item.sku}:{f.Status}"));
-            _logger.LogWarning("JD item upsert failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
+            logger.LogWarning("JD item upsert failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
         }
-        _logger.LogInformation("JD item upsert batch success={Success} failures={Failures}", result.SuccessCount, result.Failures.Count);
+        logger.LogInformation("JD item upsert batch success={Success} failures={Failures}", result.SuccessCount, result.Failures.Count);
     }
 }

@@ -48,6 +48,7 @@ public sealed class LocalSalesOrderLine
     public double Quantity { get; init; }
     public string? Unit { get; init; }
     public decimal? Price { get; init; }
+    public int ItemType { get; set; }
 }
 
 // Model for DebtorDeliveryNote information

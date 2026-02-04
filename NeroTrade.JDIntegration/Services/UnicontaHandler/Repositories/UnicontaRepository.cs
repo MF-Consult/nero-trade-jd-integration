@@ -101,6 +101,9 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         var queryApi = await connectionManager.CreateQueryApiAsync();
         
         var orders = await queryApi.Query<DebtorOrderClient>((IEnumerable<PropValuePair>?)null);
+        
+        var itemTypeCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var o in orders.Where(o => o.GetUserFieldBoolean("Xoverfor1")))
         {
             //Get a single Customer by sending a filter query to Uniconta 
@@ -144,13 +147,35 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
             var lines = await queryApi.Query<DebtorOrderLineClient>(masters, null);
             foreach (var l in lines ?? Enumerable.Empty<DebtorOrderLineClient>())
             {
+                // Fetch item details to get the Type
+                int itemType = 0;
+                if (!string.IsNullOrEmpty(l._Item))
+                {
+                    if (itemTypeCache.TryGetValue(l._Item, out var cachedType))
+                    {
+                        itemType = cachedType;
+                    }
+                    else
+                    {
+                        var itemFilter = new[] { PropValuePair.GenereteWhereElements("Item", typeof(string), l._Item) };
+                        var items = await queryApi.Query<InvItemClient>(itemFilter);
+                        var item = items.FirstOrDefault();
+                        if (item != null)
+                        {
+                            itemType = (int)item._ItemType;
+                        }
+                        itemTypeCache[l._Item] = itemType;
+                    }
+                }
+
                 so.Lines.Add(new LocalSalesOrderLine
                 {
                     Sku = l._Item,
                     ItemName = l.Text,  
                     Quantity = l._Qty,
                     Unit = l.Unit,
-                    Price = (decimal?)l.Price 
+                    Price = (decimal?)l.Price,
+                    ItemType = itemType
                 });
             }
 
@@ -221,6 +246,52 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         if (result != ErrorCodes.Succes)
         {
             _logger.LogError("Failed to update status group for order {OrderNumber}. Uniconta Error: {Error}", orderNumber, result);
+            return false;
+        }
+
+        return true;
+    }
+
+    public async Task<bool> UpdatePurchaseOrderLineQuantityAsync(int purchaseNumber, string sku, double qtyNow, CancellationToken cancellationToken)
+    {
+        var queryApi = await connectionManager.CreateQueryApiAsync();
+        var crudApi = await connectionManager.CreateCrudApiAsync();
+
+        // 1. Find the purchase order
+        var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), purchaseNumber.ToString()) };
+        var orders = await queryApi.Query<CreditorOrderClient>(filter);
+        var order = orders.FirstOrDefault();
+
+        if (order == null)
+        {
+            _logger.LogWarning("Could not find purchase order {OrderNumber} in Uniconta for quantity update", purchaseNumber);
+            return false;
+        }
+
+        // 2. Find the line
+        var masters = new List<UnicontaBaseEntity> { order };
+        var lines = await queryApi.Query<CreditorOrderLineClient>(masters, null);
+        var line = lines.FirstOrDefault(l => string.Equals(l._Item, sku, StringComparison.OrdinalIgnoreCase));
+
+        if (line == null)
+        {
+            _logger.LogWarning("Could not find line with SKU {Sku} in purchase order {OrderNumber}", sku, purchaseNumber);
+            return false;
+        }
+
+        // 3. Update the quantity
+        // If the quantity is already correct, no need to update
+        if (Math.Abs(line._Qty - qtyNow) < 0.001)
+        {
+             return true;
+        }
+
+        line._QtyNow = qtyNow;
+        var result = await crudApi.Update(line);
+
+        if (result != ErrorCodes.Succes)
+        {
+            _logger.LogError("Failed to update quantity for line {Sku} in purchase order {OrderNumber}. Uniconta Error: {Error}", sku, purchaseNumber, result);
             return false;
         }
 

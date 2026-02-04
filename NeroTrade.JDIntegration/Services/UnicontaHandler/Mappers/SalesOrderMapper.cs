@@ -179,7 +179,7 @@ public sealed class SalesOrderMapper
                 company = null,
                 vat = null,
                 email = so.DeliveryContactEmail,
-                telephoneDirect = null,
+                telephoneDirect = so.DeliveryContactPhone,
                 telephoneMobile = so.DeliveryContactPhone
             },
             files = files?.ToList() ?? new List<JdRequestOrderFileRef>()

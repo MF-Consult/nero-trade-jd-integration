@@ -125,9 +125,10 @@ public sealed class JdRepository : IJdRepository
         var results = new List<JdIncomingShipment>();
         var page = 1;
         var pageSize = 200;
+        var approvedStatus = 1;
         while (true)
         {
-            var qs = $"pageNumber={page}&pageSize={pageSize}";
+            var qs = $"pageNumber={page}&pageSize={pageSize}&status={approvedStatus}";
             var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/incomingshipments?{qs}"), cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
@@ -135,6 +136,7 @@ public sealed class JdRepository : IJdRepository
                 _logger.LogWarning("JD GET incoming shipments failed: {Status} {Body}", (int)response.StatusCode, body);
                 break;
             }
+            var body2 = await response.Content.ReadAsStringAsync(cancellationToken);
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             var pagePayload = await JsonSerializer.DeserializeAsync<JdPagedResponse<JdIncomingShipment>>(stream, cancellationToken: cancellationToken)
                               ?? new JdPagedResponse<JdIncomingShipment>();
@@ -146,7 +148,21 @@ public sealed class JdRepository : IJdRepository
                 break;
             page++;
         }
+        
         return results;
+    }
+
+    public async Task<(bool ok, int status, string message, JdIncomingShipment? returned)> GetIncomingShipmentByIdAsync(long id, CancellationToken cancellationToken)
+    {
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/incomingshipments/{id}"), cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("JD GET incoming shipment by ID failed: {Status} {Body}", (int)response.StatusCode, body);
+            return (false, (int)response.StatusCode, body, null);
+        }
+        var ret = JsonSerializer.Deserialize<JdIncomingShipment>(body);
+        return (true, (int)response.StatusCode, body, ret);
     }
 
     public async Task<(bool ok, int status, string message, JdIncomingShipment? returned)> UpsertIncomingShipmentAsync(JdIncomingShipmentCreate payload, CancellationToken cancellationToken)
@@ -225,7 +241,7 @@ public sealed class JdRepository : IJdRepository
 
     public async Task<(bool ok, int status, string message, JdRequestOrder? returned)> CreateRequestOrderAsync(long inventoryId, JdRequestOrderCreate payload, CancellationToken cancellationToken)
     {
-        payload.productItems.ForEach(i => i.catalog.sku = "TESTSKU");
+        //payload.productItems.ForEach(i => i.catalog.sku = "TESTSKU");
         
         // Check if date is in the past and adjust if necessary
         if(payload.date < DateTime.UtcNow)

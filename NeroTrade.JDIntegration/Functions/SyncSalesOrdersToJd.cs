@@ -11,43 +11,28 @@ using NeroTrade.JDIntegration.Services.PdfGeneration;
 using System.Net.Http;
 using System.Net.Http.Headers;
 
-public sealed class SyncSalesOrdersToJd
+public sealed class SyncSalesOrdersToJd(
+    IJdLogisticsService jd,
+    IUnicontaService uniconta,
+    SalesOrderMapper mapper,
+    IDeliveryNotePdfService pdfService,
+    ILogger<SyncSalesOrdersToJd> logger)
 {
-    private readonly IJdLogisticsService _jd;
-    private readonly IUnicontaService _uniconta;
-    private readonly ILogger<SyncSalesOrdersToJd> _logger;
-    private readonly SalesOrderMapper _mapper;
-    private readonly IDeliveryNotePdfService _pdfService;
-
     private static readonly HttpClient FileUploadHttpClient = new();
-
-    public SyncSalesOrdersToJd(
-        IJdLogisticsService jd, 
-        IUnicontaService uniconta, 
-        SalesOrderMapper mapper,
-        IDeliveryNotePdfService pdfService,
-        ILogger<SyncSalesOrdersToJd> logger)
-    {
-        _jd = jd;
-        _uniconta = uniconta;
-        _mapper = mapper;
-        _pdfService = pdfService;
-        _logger = logger;
-    }
 
     [Function("SyncSalesOrdersToJd")]
     public async Task RunAsync([HttpTrigger(AuthorizationLevel.Function, "get", Route = "sync-salesorders-to-jd")] HttpRequestData httpReq)
     {
         var correlationId = Guid.NewGuid().ToString("N");
         using var cts = new CancellationTokenSource();
-        using var scope = _logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
-        _logger.LogInformation("SyncSalesOrdersToJd started");
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
+        logger.LogInformation("SyncSalesOrdersToJd started");
 
-        var inventories = await _jd.GetInventoriesAsync(cts.Token);
+        var inventories = await jd.GetInventoriesAsync(cts.Token);
         var inventory = inventories.FirstOrDefault();
         if (inventory == null || inventory.id == null)
         {
-            _logger.LogWarning("No inventories available in JD");
+            logger.LogWarning("No inventories available in JD");
             return;
         }
 
@@ -57,9 +42,9 @@ public sealed class SyncSalesOrdersToJd
         // Get all delivery notes for debtors to process files
         var deliveryNotesByDebtor = await LoadDeliveryNotesByDebtorAsync(cts.Token);
         var totalDeliveryNotes = deliveryNotesByDebtor.Sum(kvp => kvp.Value.Count);
-        _logger.LogInformation("Found {Count} delivery notes for processing", totalDeliveryNotes);
+        logger.LogInformation("Found {Count} delivery notes for processing", totalDeliveryNotes);
 
-        await foreach (var so in _uniconta.ReadSalesOrdersBatchedAsync(200, cts.Token))
+        await foreach (var so in uniconta.ReadSalesOrdersBatchedAsync(200, cts.Token))
         {
             // Generate and upload PDF delivery note for this order
             var generatedPdfFiles = await GenerateAndUploadDeliveryNotePdfAsync(so, cts.Token);
@@ -70,7 +55,7 @@ public sealed class SyncSalesOrdersToJd
             // Combine both file lists (generated PDF + existing files)
             var allFiles = generatedPdfFiles.Concat(existingDeliveryNotes).ToList();
 
-            batch.Add(_mapper.Map(so, allFiles));
+            batch.Add(mapper.Map(so, allFiles));
             if (batch.Count >= 200)
             {
                 await HandleBatchAsync(inventory.id.Value, batch, cts.Token);
@@ -86,20 +71,20 @@ public sealed class SyncSalesOrdersToJd
 
     private async Task HandleBatchAsync(long inventoryId, List<JdRequestOrderCreate> batch, CancellationToken ct)
     {
-        var result = await _jd.UpsertRequestOrdersAsync(inventoryId, batch, ct);
+        var result = await jd.UpsertRequestOrdersAsync(inventoryId, batch, ct);
         if (result.Failures.Count > 0)
         {
             var sample = string.Join(", ", result.Failures.Take(5).Select(f => f.Item.text));
-            _logger.LogWarning("JD request orders upsert failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
+            logger.LogWarning("JD request orders upsert failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
         }
-        _logger.LogInformation("JD request orders upsert success={Success} failures={Failures}", result.SuccessCount, result.Failures.Count);
+        logger.LogInformation("JD request orders upsert success={Success} failures={Failures}", result.SuccessCount, result.Failures.Count);
     }
 
     private async Task<Dictionary<string?, List<DebtorDeliveryNoteInfo>>> LoadDeliveryNotesByDebtorAsync(CancellationToken cancellationToken)
     {
         var deliveryNotesByDebtor = new Dictionary<string?, List<DebtorDeliveryNoteInfo>>(StringComparer.OrdinalIgnoreCase);
 
-        await foreach (var note in _uniconta.ReadDebtorDeliveryNotesAsync(cancellationToken))
+        await foreach (var note in uniconta.ReadDebtorDeliveryNotesAsync(cancellationToken))
         {
             if (note.DebtorAccount == null) continue;
 
@@ -125,12 +110,12 @@ public sealed class SyncSalesOrdersToJd
         try
         {
             // Generate PDF from sales order
-            _logger.LogDebug("Generating PDF delivery note for order {OrderNumber}", salesOrder.OrderNumber);
-            var pdfBytes = await _pdfService.GenerateDeliveryNotePdfAsync(salesOrder);
+            logger.LogDebug("Generating PDF delivery note for order {OrderNumber}", salesOrder.OrderNumber);
+            var pdfBytes = await pdfService.GenerateDeliveryNotePdfAsync(salesOrder);
             
             if (pdfBytes == null || pdfBytes.Length == 0)
             {
-                _logger.LogWarning("PDF generation returned empty bytes for order {OrderNumber}", salesOrder.OrderNumber);
+                logger.LogWarning("PDF generation returned empty bytes for order {OrderNumber}", salesOrder.OrderNumber);
                 return Array.Empty<JdRequestOrderFileRef>();
             }
 
@@ -138,14 +123,14 @@ public sealed class SyncSalesOrdersToJd
             var description = $"Delivery note for order {salesOrder.OrderNumber}";
 
             // Step 1: Create file metadata in JD and get pre-signed upload URL
-            var (ok, status, message, file, uploadUrl) = await _jd.CreateFileAsync(
+            var (ok, status, message, file, uploadUrl) = await jd.CreateFileAsync(
                 displayName,
                 description,
                 cancellationToken);
 
             if (!ok || file == null || string.IsNullOrWhiteSpace(uploadUrl))
             {
-                _logger.LogWarning("Failed to create JD file for order {Order}. Status={Status} Message={Message}", 
+                logger.LogWarning("Failed to create JD file for order {Order}. Status={Status} Message={Message}", 
                     salesOrder.OrderNumber, status, message);
                 return Array.Empty<JdRequestOrderFileRef>();
             }
@@ -154,21 +139,21 @@ public sealed class SyncSalesOrdersToJd
             var uploadSucceeded = await UploadFileContentAsync(uploadUrl, pdfBytes, "application/pdf", cancellationToken);
             if (!uploadSucceeded)
             {
-                _logger.LogWarning("Failed to upload PDF content for JD file {FileId} order {Order}", 
+                logger.LogWarning("Failed to upload PDF content for JD file {FileId} order {Order}", 
                     file.id, salesOrder.OrderNumber);
                 return Array.Empty<JdRequestOrderFileRef>();
             }
 
             // Step 3: Verify file was uploaded successfully
-            var verification = await _jd.VerifyFileAsync(file.id, cancellationToken);
+            var verification = await jd.VerifyFileAsync(file.id, cancellationToken);
             if (!verification.ok)
             {
-                _logger.LogWarning("Failed to verify JD file {FileId} for order {Order}: {Message}", 
+                logger.LogWarning("Failed to verify JD file {FileId} for order {Order}: {Message}", 
                     file.id, salesOrder.OrderNumber, verification.message);
                 return Array.Empty<JdRequestOrderFileRef>();
             }
 
-            _logger.LogInformation("Successfully generated and uploaded PDF delivery note as JD file {FileId} for order {Order}", 
+            logger.LogInformation("Successfully generated and uploaded PDF delivery note as JD file {FileId} for order {Order}", 
                 file.id, salesOrder.OrderNumber);
 
             // Return file reference with packageLabel = true (important!)
@@ -183,7 +168,7 @@ public sealed class SyncSalesOrdersToJd
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error generating or uploading PDF for order {Order}", salesOrder.OrderNumber);
+            logger.LogError(ex, "Error generating or uploading PDF for order {Order}", salesOrder.OrderNumber);
             return Array.Empty<JdRequestOrderFileRef>();
         }
     }
@@ -203,32 +188,32 @@ public sealed class SyncSalesOrdersToJd
         {
             if (note.FileData == null || note.FileData.Length == 0)
             {
-                _logger.LogDebug("Skipping delivery note {Note} for debtor {Debtor} due to missing file data", note.NoteNumber, debtorAccount);
+                logger.LogDebug("Skipping delivery note {Note} for debtor {Debtor} due to missing file data", note.NoteNumber, debtorAccount);
                 continue;
             }
 
-            var (ok, status, message, file, uploadUrl) = await _jd.CreateFileAsync(
+            var (ok, status, message, file, uploadUrl) = await jd.CreateFileAsync(
                 note.NoteName ?? $"DeliveryNote_{note.NoteNumber}",
                 $"Delivery note for debtor {debtorAccount}",
                 cancellationToken);
 
             if (!ok || file == null || string.IsNullOrWhiteSpace(uploadUrl))
             {
-                _logger.LogWarning("Failed to create JD file for debtor {Debtor}. Status={Status} Message={Message}", debtorAccount, status, message);
+                logger.LogWarning("Failed to create JD file for debtor {Debtor}. Status={Status} Message={Message}", debtorAccount, status, message);
                 continue;
             }
 
             var uploadSucceeded = await UploadFileContentAsync(uploadUrl, note.FileData, note.MimeType, cancellationToken);
             if (!uploadSucceeded)
             {
-                _logger.LogWarning("Failed to upload content for JD file {FileId} debtor {Debtor}", file.id, debtorAccount);
+                logger.LogWarning("Failed to upload content for JD file {FileId} debtor {Debtor}", file.id, debtorAccount);
                 continue;
             }
 
-            var verification = await _jd.VerifyFileAsync(file.id, cancellationToken);
+            var verification = await jd.VerifyFileAsync(file.id, cancellationToken);
             if (!verification.ok)
             {
-                _logger.LogWarning("Failed to verify JD file {FileId} for debtor {Debtor}: {Message}", file.id, debtorAccount, verification.message);
+                logger.LogWarning("Failed to verify JD file {FileId} for debtor {Debtor}: {Message}", file.id, debtorAccount, verification.message);
                 continue;
             }
 
@@ -238,7 +223,7 @@ public sealed class SyncSalesOrdersToJd
                 packageLabel = false  // Existing delivery notes are not package labels
             });
 
-            _logger.LogInformation("Uploaded delivery note {Note} as JD file {FileId} for debtor {Debtor}", note.NoteNumber, file.id, debtorAccount);
+            logger.LogInformation("Uploaded delivery note {Note} as JD file {FileId} for debtor {Debtor}", note.NoteNumber, file.id, debtorAccount);
         }
 
         return files;

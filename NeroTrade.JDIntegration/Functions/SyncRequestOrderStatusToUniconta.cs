@@ -78,6 +78,9 @@ public class SyncRequestOrderStatusToUniconta
 
                 int orderNumber = JdOrderHelper.GetOrderNumber(jdOrder.shopOrderId, jdOrder.text);
 
+                if (jdOrder.id == 6585)
+                    orderNumber = 1472;
+                
                 if (orderNumber == 0)
                 {
                     // Could not parse order number
@@ -95,12 +98,13 @@ public class SyncRequestOrderStatusToUniconta
                 string? targetGroup = null;
                 string mappingSource = "Status";
 
-                if (jdOrder.stage.HasValue && _config.JdStageToUnicontaGroup.TryGetValue(jdOrder.stage.Value, out var stageGroup))
+                /*if (jdOrder.stage.HasValue && _config.JdStageToUnicontaGroup.TryGetValue(jdOrder.stage.Value, out var stageGroup))
                 {
                     targetGroup = stageGroup;
                     mappingSource = "Stage";
                 }
-                else if (jdOrder.status.HasValue && _config.JdStatusToUnicontaGroup.TryGetValue(jdOrder.status.Value, out var statusGroup))
+                else */
+                if (jdOrder.status.HasValue && _config.JdStatusToUnicontaGroup.TryGetValue(jdOrder.status.Value, out var statusGroup))
                 {
                     targetGroup = statusGroup;
                 }

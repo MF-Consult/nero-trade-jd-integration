@@ -146,6 +146,15 @@ public sealed class JdLogisticsService(
         return result;
     }
 
+    public Task<IReadOnlyList<JdIncomingShipment>> GetIncomingShipmentsAsync(CancellationToken cancellationToken)
+        => repository.GetIncomingShipmentsAsync(cancellationToken);
+
+    public async Task<JdIncomingShipment?> GetIncomingShipmentByIdAsync(long id, CancellationToken cancellationToken)
+    {
+        var result = await repository.GetIncomingShipmentByIdAsync(id, cancellationToken);
+        return result.ok ? result.returned : null;
+    }
+
     public async Task<UpsertResult<JdInventory>> UpsertInventoriesAsync(IEnumerable<JdInventory> inventories, CancellationToken cancellationToken)
     {
         throw new NotImplementedException();
@@ -216,12 +225,6 @@ public sealed class JdLogisticsService(
     /// </summary>
     private static bool RequiresRecreation(JdRequestOrder existing, JdRequestOrderCreate incoming)
     {
-        // Compare delivery dates
-        if (existing.date != incoming.date)
-        {
-            return true;
-        }
-
         // Compare tracking note
         if (!string.Equals(existing.trackingNote, incoming.trackingNote, StringComparison.Ordinal))
         {
@@ -269,7 +272,6 @@ public sealed class JdLogisticsService(
         }
 
         return !string.Equals(existing.name, incoming.name, StringComparison.OrdinalIgnoreCase) ||
-               !string.Equals(existing.att, incoming.att, StringComparison.OrdinalIgnoreCase) ||
                !string.Equals(existing.street, incoming.street, StringComparison.OrdinalIgnoreCase) ||
                !string.Equals(existing.zip, incoming.zip, StringComparison.OrdinalIgnoreCase) ||
                !string.Equals(existing.city, incoming.city, StringComparison.OrdinalIgnoreCase) ||
