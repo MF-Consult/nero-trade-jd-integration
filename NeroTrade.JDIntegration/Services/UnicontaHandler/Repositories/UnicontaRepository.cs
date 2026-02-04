@@ -297,6 +297,38 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
 
         return true;
     }
+
+    public async Task<bool> SetPurchaseOrderHeaderFieldAsync(int purchaseNumber, string fieldName, object value, CancellationToken cancellationToken)
+    {
+        var queryApi = await connectionManager.CreateQueryApiAsync();
+        var crudApi = await connectionManager.CreateCrudApiAsync();
+
+        // 1. Find the purchase order
+        var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), purchaseNumber.ToString()) };
+        var orders = await queryApi.Query<CreditorOrderClient>(filter);
+        var order = orders.FirstOrDefault();
+
+        if (order == null)
+        {
+            _logger.LogWarning("Could not find purchase order {OrderNumber} in Uniconta for header update", purchaseNumber);
+            return false;
+        }
+
+        // 2. Update the user field
+        // We can optimize by checking existing value, but types can be tricky (bool vs string "0"/"1" etc)
+        // For now, we just update.
+        order.SetUserField(fieldName, value);
+        
+        var result = await crudApi.Update(order);
+
+        if (result != ErrorCodes.Succes)
+        {
+            _logger.LogError("Failed to update field {FieldName} on purchase order {OrderNumber}. Uniconta Error: {Error}", fieldName, purchaseNumber, result);
+            return false;
+        }
+
+        return true;
+    }
 }
 
 
