@@ -11,6 +11,7 @@ public sealed class PurchaseOrderMapper
         {
             date = DateTime.UtcNow.AddDays(2),
             text = $"PO {po.PurchaseNumber}",
+            SourcePurchaseNumber = po.PurchaseNumber,
             carrier = "TBD",
             notificationEmails = null,
             disableApprovalEmail = true,
@@ -23,7 +24,10 @@ public sealed class PurchaseOrderMapper
             {
                 quantity = (int)Math.Round(line.Quantity),
                 isSubItem = line.IsSubItem,
-                externalIdentification = line.Sku,
+                externalIdentification = string.IsNullOrWhiteSpace(line.CustomerItemNumber) 
+                    ? null 
+                    : line.CustomerItemNumber,
+                Sku = line.Sku,
                 catalog = new JdIncomingShipmentCatalogRef { id = 0 },
                 unit = line.Unit
             });

@@ -96,6 +96,11 @@ public sealed class UnicontaService(IUnicontaRepository repo) : IUnicontaService
         return repo.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, fieldName, value, cancellationToken);
     }
 
+    public Task<bool> SetSalesOrderHeaderFieldAsync(int orderNumber, string fieldName, object value, CancellationToken cancellationToken)
+    {
+        return repo.SetSalesOrderHeaderFieldAsync(orderNumber, fieldName, value, cancellationToken);
+    }
+
     public async IAsyncEnumerable<DebtorDeliveryNoteInfo> ReadDebtorDeliveryNotesAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await foreach (var note in repo.ReadDebtorDeliveryNotesAsync(cancellationToken))

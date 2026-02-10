@@ -56,9 +56,9 @@ public class SyncReceivedQuantityToUniconta(
                     continue;
                 }
 
-                // Update "fldRecievedByJD" to true on the Purchase Order header
+                // Update "xRecievedByJD" to true on the Purchase Order header
                 // We do this regardless of line items, as long as we have identified the PO.
-                await uniconta.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, "fldRecievedByJD", true, token);
+                await uniconta.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, "xRecievedByJD", true, token);
 
                 // Fetch full details to get registered items
                 var shipment = await jd.GetIncomingShipmentByIdAsync(summary.id.Value, token);

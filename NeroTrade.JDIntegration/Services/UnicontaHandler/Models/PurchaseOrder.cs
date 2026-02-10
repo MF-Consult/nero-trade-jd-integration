@@ -37,6 +37,7 @@ public sealed class LocalPurchaseOrderLine
     public double Quantity { get; init; }
     public bool IsSubItem { get; init; }
     public string? Unit { get; init; }
+    public string? CustomerItemNumber { get; init; }
 }
 
 

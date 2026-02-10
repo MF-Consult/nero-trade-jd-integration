@@ -108,13 +108,8 @@ public sealed class JdLogisticsService(
     }
 
     // Incoming shipments (purchase orders)
-    public async Task<UpsertResult<JdIncomingShipmentCreate>> UpsertIncomingShipmentsAsync(IEnumerable<JdIncomingShipmentCreate> shipments, CancellationToken cancellationToken)
+    public async Task<CreateResult<JdIncomingShipmentCreate>> CreateIncomingShipmentsAsync(IEnumerable<JdIncomingShipmentCreate> shipments, CancellationToken cancellationToken)
     {
-        var existing = (await repository.GetIncomingShipmentsAsync(cancellationToken))
-            .Where(s => !string.IsNullOrWhiteSpace(s.text))
-            .GroupBy(s => s.text!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-
         _existingItemsBySku ??= (await repository.GetCatalogItemsAsync(cancellationToken))
             .Where(i => !string.IsNullOrWhiteSpace(i.sku))
             .GroupBy(i => i.sku!, StringComparer.OrdinalIgnoreCase)
@@ -122,7 +117,7 @@ public sealed class JdLogisticsService(
 
         _containerTypes ??= await repository.GetContainerTypesAsync(cancellationToken);
 
-        var result = new UpsertResult<JdIncomingShipmentCreate>();
+        var result = new CreateResult<JdIncomingShipmentCreate>();
         foreach (var shipment in shipments)
         {
             var key = shipment.text ?? string.Empty;
@@ -134,14 +129,17 @@ public sealed class JdLogisticsService(
 
             await AttemptToResolveCatalogItemsAsync(shipment, cancellationToken);
             await SetContainerTypesAsync(shipment, cancellationToken);
-
-            if (existing.TryGetValue(key, out var ex) && ex.id.HasValue)
-            {
-                shipment.order = new JdIncomingShipmentOrderRef { id = ex.id.Value };
-            }
             
             var upsert = await repository.UpsertIncomingShipmentAsync(shipment, cancellationToken);
-            if (upsert.ok) result.SuccessCount++; else result.Failures.Add(new UpsertFailure<JdIncomingShipmentCreate>(shipment, upsert.status, upsert.message));
+            if (upsert.ok) 
+            {
+                result.SuccessCount++; 
+                result.CreatedItems.Add(shipment);
+            }
+            else 
+            {
+                result.Failures.Add(new UpsertFailure<JdIncomingShipmentCreate>(shipment, upsert.status, upsert.message));
+            }
         }
         return result;
     }
@@ -343,9 +341,12 @@ public sealed class JdLogisticsService(
         if (shipment.lines.Count == 0) return;
         foreach (var line in shipment.lines)
         {
-            if (string.IsNullOrWhiteSpace(line.externalIdentification)) continue;
+            // Use Sku for lookup if available, otherwise try externalIdentification (fallback)
+            var skuToLookup = !string.IsNullOrWhiteSpace(line.Sku) ? line.Sku : line.externalIdentification;
 
-            if (_existingItemsBySku.TryGetValue(line.externalIdentification, out var item) && item.id.HasValue)
+            if (string.IsNullOrWhiteSpace(skuToLookup)) continue;
+
+            if (_existingItemsBySku.TryGetValue(skuToLookup, out var item) && item.id.HasValue)
             {
                 line.catalog = new JdIncomingShipmentCatalogRef { id = item.id.Value };
                 continue;

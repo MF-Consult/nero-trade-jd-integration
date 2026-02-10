@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace NeroTrade.JDIntegration.Models.ExternalIntegration;
 
 public class JdIncomingLine
@@ -7,6 +9,10 @@ public class JdIncomingLine
     public bool? isSubItem { get; set; }
     public string? externalIdentification { get; set; }
     public string? unit { get; set; }
+    
+    [JsonIgnore]
+    public string? Sku { get; set; }
+
     public JdIncomingShipmentCatalogRef? catalog { get; set; }
     public JdIncomingShipmentContainerTypeRef? inventoryContainerType { get; set; }
 }
@@ -20,6 +26,10 @@ public class JdIncomingShipmentCreate
     public string? text { get; set; }
     public string? carrier { get; set; }
     public bool? disableApprovalEmail { get; set; }
+    
+    [JsonIgnore]
+    public int? SourcePurchaseNumber { get; set; }
+
     public List<JdIncomingShipmentFileRef>? files { get; set; }
     public List<JdIncomingLine> lines { get; set; } = new();
 }

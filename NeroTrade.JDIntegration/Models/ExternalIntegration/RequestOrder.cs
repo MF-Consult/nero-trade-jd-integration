@@ -134,6 +134,10 @@ public class JdRequestOrderCreate
     public string? deliveryNoteText { get; set; }
     public string? shopOrderId { get; set; }
     public bool? disableApprovalEmail { get; set; }
+    
+    [JsonIgnore]
+    public int? SourceOrderNumber { get; set; }
+
     public JdAddress? address { get; set; }
     public JdRequestOrderContactPerson? contactPerson { get; set; }
     public JdRequestOrderOrderRef? order { get; set; }

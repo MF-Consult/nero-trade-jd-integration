@@ -47,13 +47,27 @@ public sealed class SyncPurchaseOrdersToJd(
 
     private async Task HandleBatchAsync(List<JdIncomingShipmentCreate> batch, CancellationToken ct)
     {
-        var result = await jd.UpsertIncomingShipmentsAsync(batch, ct);
+        var result = await jd.CreateIncomingShipmentsAsync(batch, ct);
         if (result.Failures.Count > 0)
         {
             var sample = string.Join(", ", result.Failures.Take(5).Select(f => f.Item.text));
-            logger.LogWarning("Incoming shipments upsert failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
+            logger.LogWarning("Incoming shipments create failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
         }
-        logger.LogInformation("JD incoming shipments upsert batch success={Success} failures={Failures}", result.SuccessCount, result.Failures.Count);
+
+        // Mark successful orders as created in Uniconta
+        int markedCount = 0;
+        foreach (var item in result.CreatedItems)
+        {
+            if (item.SourcePurchaseNumber.HasValue)
+            {
+                var success = await uniconta.SetPurchaseOrderHeaderFieldAsync(item.SourcePurchaseNumber.Value, "xCreatedAtJD", true, ct);
+                if (success) markedCount++;
+                else logger.LogError("Failed to mark PO {Po} as CreatedAtJD in Uniconta", item.SourcePurchaseNumber.Value);
+            }
+        }
+
+        logger.LogInformation("JD incoming shipments create batch success={Success} marked_uniconta={Marked} failures={Failures}", 
+            result.SuccessCount, markedCount, result.Failures.Count);
     }
 }
 

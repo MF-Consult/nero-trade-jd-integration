@@ -58,7 +58,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
         var orders = await queryApi.Query<CreditorOrderClient>((IEnumerable<PropValuePair>?)null);
-        foreach (var o in orders)
+        foreach (var o in orders.Where(o => o.GetUserFieldBoolean("xTransferToJD") && !o.GetUserFieldBoolean("xCreatedAtJD")))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var po = new LocalPurchaseOrder
@@ -88,7 +88,8 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                     Sku = l._Item,
                     Quantity = l._Qty,
                     IsSubItem = true,
-                    Unit = l.Unit
+                    Unit = l.Unit,
+                    CustomerItemNumber = l.GetUserField("xExternalSku") as string
                 });
             }
 
@@ -104,7 +105,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         
         var itemTypeCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var o in orders.Where(o => o.GetUserFieldBoolean("Xoverfor1")))
+        foreach (var o in orders.Where(o => o.GetUserFieldBoolean("Xoverfor1") && !o.GetUserFieldBoolean("xCreatedAtJD")))
         {
             //Get a single Customer by sending a filter query to Uniconta 
             List<PropValuePair> filter = [PropValuePair.GenereteWhereElements("Account", typeof(string), o.Account)]; 
@@ -324,6 +325,36 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         if (result != ErrorCodes.Succes)
         {
             _logger.LogError("Failed to update field {FieldName} on purchase order {OrderNumber}. Uniconta Error: {Error}", fieldName, purchaseNumber, result);
+            return false;
+        }
+
+        return true;
+    }
+
+    public async Task<bool> SetSalesOrderHeaderFieldAsync(int orderNumber, string fieldName, object value, CancellationToken cancellationToken)
+    {
+        var queryApi = await connectionManager.CreateQueryApiAsync();
+        var crudApi = await connectionManager.CreateCrudApiAsync();
+
+        // 1. Find the sales order
+        var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), orderNumber.ToString()) };
+        var orders = await queryApi.Query<DebtorOrderClient>(filter);
+        var order = orders.FirstOrDefault();
+
+        if (order == null)
+        {
+            _logger.LogWarning("Could not find sales order {OrderNumber} in Uniconta for header update", orderNumber);
+            return false;
+        }
+
+        // 2. Update the user field
+        order.SetUserField(fieldName, value);
+        
+        var result = await crudApi.Update(order);
+
+        if (result != ErrorCodes.Succes)
+        {
+            _logger.LogError("Failed to update field {FieldName} on sales order {OrderNumber}. Uniconta Error: {Error}", fieldName, orderNumber, result);
             return false;
         }
 

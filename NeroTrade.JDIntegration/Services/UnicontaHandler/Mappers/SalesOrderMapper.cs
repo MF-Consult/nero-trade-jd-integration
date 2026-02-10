@@ -157,6 +157,7 @@ public sealed class SalesOrderMapper
         {
             date = finalDeliveryDate,
             text = $"SO {so.OrderNumber} - {so.RemarkText}",
+            SourceOrderNumber = so.OrderNumber,
             trackingNote = so.TrackingNote,
             deliveryNoteText = so.DeliveryNoteText,
             disableApprovalEmail = false,
@@ -188,6 +189,9 @@ public sealed class SalesOrderMapper
         foreach (var line in so.Lines)
         {
             if (string.IsNullOrWhiteSpace(line.Sku)) continue;
+            // Skip service items (ItemType 1) - these are included in the PDF but should not be sent to JD
+            if (line.ItemType == 1) continue;
+
             create.productItems.Add(new JdRequestOrderProductItem
             {
                 quantity = (int)Math.Round(line.Quantity),

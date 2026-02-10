@@ -72,12 +72,34 @@ public sealed class SyncSalesOrdersToJd(
     private async Task HandleBatchAsync(long inventoryId, List<JdRequestOrderCreate> batch, CancellationToken ct)
     {
         var result = await jd.UpsertRequestOrdersAsync(inventoryId, batch, ct);
+        
+        // Build set of failed order numbers for quick lookup
+        var failedOrderNumbers = result.Failures
+            .Where(f => f.Item.SourceOrderNumber.HasValue)
+            .Select(f => f.Item.SourceOrderNumber!.Value)
+            .ToHashSet();
+
+        // Mark successful orders as created in Uniconta
+        int markedCount = 0;
+        foreach (var order in batch)
+        {
+            if (order.SourceOrderNumber.HasValue && !failedOrderNumbers.Contains(order.SourceOrderNumber.Value))
+            {
+                var success = await uniconta.SetSalesOrderHeaderFieldAsync(
+                    order.SourceOrderNumber.Value, "xCreatedAtJD", true, ct);
+                if (success) markedCount++;
+                else logger.LogError("Failed to mark SO {Order} as CreatedAtJD", order.SourceOrderNumber.Value);
+            }
+        }
+
+        logger.LogInformation("JD request orders upsert success={Success} marked_uniconta={Marked} failures={Failures}", 
+            result.SuccessCount, markedCount, result.Failures.Count);
+        
         if (result.Failures.Count > 0)
         {
             var sample = string.Join(", ", result.Failures.Take(5).Select(f => f.Item.text));
             logger.LogWarning("JD request orders upsert failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
         }
-        logger.LogInformation("JD request orders upsert success={Success} failures={Failures}", result.SuccessCount, result.Failures.Count);
     }
 
     private async Task<Dictionary<string?, List<DebtorDeliveryNoteInfo>>> LoadDeliveryNotesByDebtorAsync(CancellationToken cancellationToken)

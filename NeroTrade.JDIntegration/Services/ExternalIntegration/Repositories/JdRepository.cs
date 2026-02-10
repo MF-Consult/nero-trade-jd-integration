@@ -180,20 +180,6 @@ public sealed class JdRepository : IJdRepository
         return (true, (int)response.StatusCode, body, ret);
     }
 
-    public async Task<(bool ok, int status, string message)> UpdateIncomingShipmentAsync(long id, JdIncomingShipmentCreate payload, CancellationToken cancellationToken)
-    {
-        using var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-        var request = new HttpRequestMessage(HttpMethod.Put, $"api/incomingshipments/{id}") { Content = content };
-        var response = await SendWithRetryAsync(() => request, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode)
-        {
-            _logger.LogWarning("JD PUT incoming shipment failed: {Status} {Body}", (int)response.StatusCode, body);
-            return (false, (int)response.StatusCode, body);
-        }
-        return (true, (int)response.StatusCode, body);
-    }
-
     public async Task<IReadOnlyList<JdContainerType>> GetContainerTypesAsync(CancellationToken cancellationToken)
     {
         var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/containertypes"), cancellationToken);
