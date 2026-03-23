@@ -15,7 +15,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         var queryApi = await connectionManager.CreateQueryApiAsync();
         // No filters -> fetch all
         var debtors = await queryApi.Query<DebtorClient>((IEnumerable<PropValuePair>?)null);
-        foreach (var d in debtors.Where(d => d.GetUserFieldBoolean("Xoverfort")))
+        foreach (var d in (debtors ?? Enumerable.Empty<DebtorClient>()).Where(d => d != null && d.GetUserFieldBoolean("Xoverfort")))
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return new LocalDebtor
@@ -36,7 +36,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
         var items = await queryApi.Query<InvItemClient>((IEnumerable<PropValuePair>?)null);
-        foreach (var i in items.Where(i => i.GetUserFieldBoolean("XoverforVare")))
+        foreach (var i in (items ?? Enumerable.Empty<InvItemClient>()).Where(i => i != null && i.GetUserFieldBoolean("XoverforVare")))
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return new LocalInventoryItem
@@ -58,7 +58,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
         var orders = await queryApi.Query<CreditorOrderClient>((IEnumerable<PropValuePair>?)null);
-        foreach (var o in orders.Where(o => o.GetUserFieldBoolean("xTransferToJD") && !o.GetUserFieldBoolean("xCreatedAtJD")))
+        foreach (var o in (orders ?? Enumerable.Empty<CreditorOrderClient>()).Where(o => o != null && o.GetUserFieldBoolean("xTransferToJD") && !o.GetUserFieldBoolean("xCreatedAtJD")))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var po = new LocalPurchaseOrder
@@ -100,12 +100,12 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
     public async IAsyncEnumerable<LocalSalesOrder> ReadAllSalesOrdersAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
-        
+
         var orders = await queryApi.Query<DebtorOrderClient>((IEnumerable<PropValuePair>?)null);
-        
+
         var itemTypeCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var o in orders.Where(o => o.GetUserFieldBoolean("Xoverfor1") && !o.GetUserFieldBoolean("xCreatedAtJD")))
+        foreach (var o in (orders ?? Enumerable.Empty<DebtorOrderClient>()).Where(o => o != null && o.GetUserFieldBoolean("Xoverfor1") && !o.GetUserFieldBoolean("xCreatedAtJD")))
         {
             //Get a single Customer by sending a filter query to Uniconta 
             List<PropValuePair> filter = [PropValuePair.GenereteWhereElements("Account", typeof(string), o.Account)]; 
@@ -204,8 +204,8 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         var queryApi = await connectionManager.CreateQueryApiAsync();
         // Fetch all orders - we need to scan them to match with JD
         var orders = await queryApi.Query<DebtorOrderClient>((IEnumerable<PropValuePair>?)null);
-        
-        foreach (var o in orders)
+
+        foreach (var o in (orders ?? Enumerable.Empty<DebtorOrderClient>()).Where(o => o != null))
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return new LocalSalesOrder
