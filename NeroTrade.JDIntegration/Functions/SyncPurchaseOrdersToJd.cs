@@ -14,7 +14,7 @@ public sealed class SyncPurchaseOrdersToJd(
     ILogger<SyncPurchaseOrdersToJd> logger)
 {
     [Function("SyncPurchaseOrdersToJd")]
-    public async Task RunAsync([HttpTrigger(AuthorizationLevel.Function, "get", Route = "sync-purchaseorders-to-jd")] HttpRequestData req)
+    public async Task RunAsync([TimerTrigger("*/40 * * * * *")] TimerInfo timer)
     {
         var correlationId = Guid.NewGuid().ToString("N");
         using var cts = new CancellationTokenSource();

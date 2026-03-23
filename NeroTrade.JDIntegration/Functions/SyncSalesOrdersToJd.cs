@@ -21,7 +21,7 @@ public sealed class SyncSalesOrdersToJd(
     private static readonly HttpClient FileUploadHttpClient = new();
 
     [Function("SyncSalesOrdersToJd")]
-    public async Task RunAsync([HttpTrigger(AuthorizationLevel.Function, "get", Route = "sync-salesorders-to-jd")] HttpRequestData httpReq)
+    public async Task RunAsync([TimerTrigger("*/30 * * * * *")] TimerInfo timer)
     {
         var correlationId = Guid.NewGuid().ToString("N");
         using var cts = new CancellationTokenSource();

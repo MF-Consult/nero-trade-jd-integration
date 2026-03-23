@@ -28,8 +28,7 @@ public class SyncRequestOrderStatusToUniconta
     }
 
     [Function("SyncRequestOrderStatusToUniconta")]
-    public async Task RunAsync(
-        [HttpTrigger(AuthorizationLevel.Function, "get", Route = "sync-status-to-uniconta")] HttpRequestData req)
+    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer)
     {
         var correlationId = Guid.NewGuid().ToString("N");
         using var scope = _logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
@@ -137,17 +136,12 @@ public class SyncRequestOrderStatusToUniconta
                 }
             }
 
-            _logger.LogInformation("Sync Completed. Updated: {Updated}, Errors: {Errors}, Skipped/NoChange: {Skipped}", 
+            _logger.LogInformation("Sync Completed. Updated: {Updated}, Errors: {Errors}, Skipped/NoChange: {Skipped}",
                 updatedCount, errorCount, skippedCount);
-
-            var response = req.CreateResponse(System.Net.HttpStatusCode.OK);
-            await response.WriteStringAsync($"Sync completed. Updated: {updatedCount}, Errors: {errorCount}");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error during Request Order Status Sync");
-            var errorResponse = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
-            await errorResponse.WriteStringAsync("Internal Server Error during sync");
         }
     }
 }

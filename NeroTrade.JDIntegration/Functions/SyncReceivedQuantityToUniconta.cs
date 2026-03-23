@@ -12,8 +12,7 @@ public class SyncReceivedQuantityToUniconta(
     ILogger<SyncReceivedQuantityToUniconta> logger)
 {
     [Function("SyncReceivedQuantityToUniconta")]
-    public async Task<HttpResponseData> RunAsync(
-        [HttpTrigger(AuthorizationLevel.Function, "get", Route = "sync-received-quantity-to-uniconta")] HttpRequestData req)
+    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer)
     {
         var correlationId = Guid.NewGuid().ToString("N");
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
@@ -101,19 +100,12 @@ public class SyncReceivedQuantityToUniconta(
                 if (poUpdated) updatedCount++;
             }
 
-            logger.LogInformation("Sync Completed. Processed POs: {Updated}, Line Errors: {Errors}, Skipped Shipments: {Skipped}", 
+            logger.LogInformation("Sync Completed. Processed POs: {Updated}, Line Errors: {Errors}, Skipped Shipments: {Skipped}",
                 updatedCount, errorCount, skippedCount);
-
-            var response = req.CreateResponse(System.Net.HttpStatusCode.OK);
-            await response.WriteStringAsync($"Sync completed. Processed POs: {updatedCount}, Line Errors: {errorCount}");
-            return response;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error during Received Quantity Sync");
-            var errorResponse = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
-            await errorResponse.WriteStringAsync("Internal Server Error during sync");
-            return errorResponse;
         }
     }
 }

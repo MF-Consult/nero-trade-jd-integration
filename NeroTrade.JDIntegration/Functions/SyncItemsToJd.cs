@@ -13,7 +13,7 @@ public sealed class SyncItemsToJd(
     ILogger<SyncItemsToJd> logger)
 {
     [Function("SyncItemsToJd")]
-    public async Task RunAsync([HttpTrigger(AuthorizationLevel.Function, "get", Route = "sync-items-to-jd")] HttpRequestData req)
+    public async Task RunAsync([TimerTrigger("0 */2 * * * *")] TimerInfo timer)
     {
         var correlationId = Guid.NewGuid().ToString("N");
         using var cts = new CancellationTokenSource();
