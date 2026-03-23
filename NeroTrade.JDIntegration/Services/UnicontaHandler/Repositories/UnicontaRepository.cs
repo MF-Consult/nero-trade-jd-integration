@@ -225,7 +225,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         // 1. Find the order
         var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), orderNumber.ToString()) };
         var orders = await queryApi.Query<DebtorOrderClient>(filter);
-        var order = orders.FirstOrDefault();
+        var order = (orders ?? Enumerable.Empty<DebtorOrderClient>()).FirstOrDefault();
 
         if (order == null)
         {
@@ -261,7 +261,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         // 1. Find the purchase order
         var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), purchaseNumber.ToString()) };
         var orders = await queryApi.Query<CreditorOrderClient>(filter);
-        var order = orders.FirstOrDefault();
+        var order = (orders ?? Enumerable.Empty<CreditorOrderClient>()).FirstOrDefault();
 
         if (order == null)
         {
@@ -272,7 +272,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         // 2. Find the line
         var masters = new List<UnicontaBaseEntity> { order };
         var lines = await queryApi.Query<CreditorOrderLineClient>(masters, null);
-        var line = lines.FirstOrDefault(l => string.Equals(l._Item, sku, StringComparison.OrdinalIgnoreCase));
+        var line = (lines ?? Enumerable.Empty<CreditorOrderLineClient>()).FirstOrDefault(l => string.Equals(l._Item, sku, StringComparison.OrdinalIgnoreCase));
 
         if (line == null)
         {
@@ -307,7 +307,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         // 1. Find the purchase order
         var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), purchaseNumber.ToString()) };
         var orders = await queryApi.Query<CreditorOrderClient>(filter);
-        var order = orders.FirstOrDefault();
+        var order = (orders ?? Enumerable.Empty<CreditorOrderClient>()).FirstOrDefault();
 
         if (order == null)
         {
@@ -339,7 +339,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         // 1. Find the sales order
         var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), orderNumber.ToString()) };
         var orders = await queryApi.Query<DebtorOrderClient>(filter);
-        var order = orders.FirstOrDefault();
+        var order = (orders ?? Enumerable.Empty<DebtorOrderClient>()).FirstOrDefault();
 
         if (order == null)
         {
