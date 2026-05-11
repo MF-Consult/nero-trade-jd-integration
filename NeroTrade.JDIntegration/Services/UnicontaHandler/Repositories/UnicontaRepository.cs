@@ -4,7 +4,6 @@ namespace NeroTrade.JDIntegration.Services.UnicontaHandler.Repositories;
 
 using Models;
 using Constants;
-using Uniconta.API.System;
 using Uniconta.ClientTools.DataModel;
 using Uniconta.Common;
 using Microsoft.Extensions.Logging;
@@ -251,11 +250,11 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 return true;
             }
 
-            // Update against a snapshot of the loaded state so Uniconta only persists the changed field
-            // (a plain Update(order) does not reliably persist the change here).
-            var original = StreamingManager.Clone(order);
+            // Set both the property and the backing field — Update(order) only persists the change
+            // when the raw _Group field is updated.
             order.Group = group;
-            var result = await crudApi.Update(order, original);
+            order._Group = group;
+            var result = await crudApi.Update(order);
 
             if (result != ErrorCodes.Succes)
             {
@@ -282,13 +281,14 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 return false;
             }
 
-            // Update against a snapshot of the loaded state so Uniconta persists the changes.
-            var original = StreamingManager.Clone(order);
+            // Set both the property and the backing field for Group — Update(order) only persists the
+            // change when the raw _Group field is updated.
             order.Group = group;
+            order._Group = group;
             foreach (var (name, value) in userFields)
                 order.SetUserField(name, value);
 
-            var result = await crudApi.Update(order, original);
+            var result = await crudApi.Update(order);
 
             if (result != ErrorCodes.Succes)
             {
@@ -334,9 +334,8 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 return true;
             }
 
-            var original = StreamingManager.Clone(line);
             line._QtyNow = qtyNow;
-            var result = await crudApi.Update(line, original);
+            var result = await crudApi.Update(line);
 
             if (result != ErrorCodes.Succes)
             {
@@ -366,12 +365,10 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 return false;
             }
 
-            // Update against a snapshot of the loaded state so Uniconta persists the change.
-            var original = StreamingManager.Clone(order);
             foreach (var (name, value) in fields)
                 order.SetUserField(name, value);
 
-            var result = await crudApi.Update(order, original);
+            var result = await crudApi.Update(order);
 
             if (result != ErrorCodes.Succes)
             {
