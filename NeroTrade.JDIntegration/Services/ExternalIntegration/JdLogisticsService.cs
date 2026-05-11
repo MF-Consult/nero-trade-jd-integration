@@ -104,6 +104,13 @@ public sealed class JdLogisticsService(
         _existingItemsBySku = await cache.GetItemsBySkuAsync(() => repository.GetCatalogItemsAsync(cancellationToken), cancellationToken);
         _containerTypes = await cache.GetContainerTypesAsync(() => repository.GetContainerTypesAsync(cancellationToken), cancellationToken);
 
+        // JD has no external-id lookup for incoming shipments, so we dedupe on the "PO {n}" text we set.
+        // Without this every run creates a brand-new shipment for POs that already exist in JD.
+        var existingPurchaseNumbers = (await repository.GetIncomingShipmentsAsync(cancellationToken))
+            .Select(s => JdOrderHelper.GetPurchaseOrderNumber(s.text))
+            .Where(n => n != 0)
+            .ToHashSet();
+
         var result = new CreateResult<JdIncomingShipmentCreate>();
         foreach (var shipment in shipments)
         {
@@ -114,16 +121,27 @@ public sealed class JdLogisticsService(
                 continue;
             }
 
+            var purchaseNumber = shipment.SourcePurchaseNumber ?? JdOrderHelper.GetPurchaseOrderNumber(shipment.text);
+            if (purchaseNumber != 0 && existingPurchaseNumbers.Contains(purchaseNumber))
+            {
+                // Already in JD. Treat as success so the caller still flags it in Uniconta and stops re-sending it.
+                _logger.LogInformation("Incoming shipment for PO {Po} already exists in JD, skipping create", purchaseNumber);
+                result.SuccessCount++;
+                result.CreatedItems.Add(shipment);
+                continue;
+            }
+
             await AttemptToResolveCatalogItemsAsync(shipment, cancellationToken);
             await SetContainerTypesAsync(shipment, cancellationToken);
-            
+
             var upsert = await repository.UpsertIncomingShipmentAsync(shipment, cancellationToken);
-            if (upsert.ok) 
+            if (upsert.ok)
             {
-                result.SuccessCount++; 
+                result.SuccessCount++;
                 result.CreatedItems.Add(shipment);
+                if (purchaseNumber != 0) existingPurchaseNumbers.Add(purchaseNumber);
             }
-            else 
+            else
             {
                 result.Failures.Add(new UpsertFailure<JdIncomingShipmentCreate>(shipment, upsert.status, upsert.message));
             }
