@@ -105,8 +105,9 @@ public sealed class JdLogisticsService(
         _containerTypes = await cache.GetContainerTypesAsync(() => repository.GetContainerTypesAsync(cancellationToken), cancellationToken);
 
         // JD has no external-id lookup for incoming shipments, so we dedupe on the "PO {n}" text we set.
-        // Without this every run creates a brand-new shipment for POs that already exist in JD.
-        var existingPurchaseNumbers = (await repository.GetIncomingShipmentsAsync(cancellationToken))
+        // Fetch all statuses (not just approved) so a shipment that exists but is still a draft is also
+        // detected — that prevents both a duplicate create and lets a later run catch up the Uniconta status.
+        var existingPurchaseNumbers = (await repository.GetIncomingShipmentsAsync(cancellationToken, status: null))
             .Select(s => JdOrderHelper.GetPurchaseOrderNumber(s.text))
             .Where(n => n != 0)
             .ToHashSet();

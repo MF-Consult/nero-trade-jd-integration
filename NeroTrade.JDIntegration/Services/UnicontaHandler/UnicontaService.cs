@@ -86,6 +86,11 @@ public sealed class UnicontaService(IUnicontaRepository repo) : IUnicontaService
         return repo.UpdateSalesOrderGroupAsync(orderNumber, group, cancellationToken);
     }
 
+    public Task<bool> SetSalesOrderStatusAsync(int orderNumber, string group, IReadOnlyDictionary<string, object> userFields, CancellationToken cancellationToken)
+    {
+        return repo.SetSalesOrderStatusAsync(orderNumber, group, userFields, cancellationToken);
+    }
+
     public Task<bool> UpdatePurchaseOrderLineQuantityAsync(int purchaseNumber, string sku, double qtyNow, CancellationToken cancellationToken)
     {
         return repo.UpdatePurchaseOrderLineQuantityAsync(purchaseNumber, sku, qtyNow, cancellationToken);

@@ -72,33 +72,47 @@ public sealed class SyncSalesOrdersToJd(
     private async Task HandleBatchAsync(long inventoryId, List<JdRequestOrderCreate> batch, CancellationToken ct)
     {
         var result = await jd.UpsertRequestOrdersAsync(inventoryId, batch, ct);
-        
-        // Build set of failed order numbers for quick lookup
+
         var failedOrderNumbers = result.Failures
             .Where(f => f.Item.SourceOrderNumber.HasValue)
             .Select(f => f.Item.SourceOrderNumber!.Value)
             .ToHashSet();
 
-        // Lock successfully-handled orders so they are not re-processed (re-PDF'd) next run.
-        // SyncRequestOrderStatusToUniconta later replaces this group with the live JD status.
-        int markedCount = 0;
+        // Lock successfully-handled orders so they are not re-processed (re-PDF'd) next run, and clear any
+        // stale error message. SyncRequestOrderStatusToUniconta later replaces "Oprettet" with the live JD status.
+        int markedCreated = 0;
         foreach (var order in batch)
         {
-            if (order.SourceOrderNumber.HasValue && !failedOrderNumbers.Contains(order.SourceOrderNumber.Value))
+            if (!order.SourceOrderNumber.HasValue || failedOrderNumbers.Contains(order.SourceOrderNumber.Value)) continue;
+            var success = await uniconta.SetSalesOrderStatusAsync(order.SourceOrderNumber.Value, SalesOrderJdGroup.Created, new Dictionary<string, object>
             {
-                var success = await uniconta.UpdateSalesOrderGroupAsync(
-                    order.SourceOrderNumber.Value, SalesOrderJdGroup.Created, ct);
-                if (success) markedCount++;
-                else logger.LogError("Failed to set SO {Order} group to Oprettet", order.SourceOrderNumber.Value);
-            }
+                [UnicontaUserFields.IntegrationIssue] = string.Empty,
+            }, ct);
+            if (success) markedCreated++;
+            else logger.LogError("Failed to set SO {Order} group to Oprettet", order.SourceOrderNumber.Value);
         }
 
-        logger.LogInformation("JD request orders upsert success={Success} marked_uniconta={Marked} failures={Failures}",
-            result.SuccessCount, markedCount, result.Failures.Count);
-        
+        // Failed in JD: status = Fejlet, record why, and consume the transfer trigger. It will only be
+        // retried once a user fixes the issue and sets Xoverfor1 again (Group is then "Fejlet" or empty).
+        int markedFailed = 0;
+        foreach (var failure in result.Failures)
+        {
+            if (!failure.Item.SourceOrderNumber.HasValue) continue;
+            var success = await uniconta.SetSalesOrderStatusAsync(failure.Item.SourceOrderNumber.Value, SalesOrderJdGroup.Failed, new Dictionary<string, object>
+            {
+                [UnicontaUserFields.IntegrationIssue] = string.IsNullOrWhiteSpace(failure.Message) ? "Ukendt fejl ved oprettelse i JD" : failure.Message,
+                [UnicontaUserFields.SalesOrderTransferFlag] = false,
+            }, ct);
+            if (success) markedFailed++;
+            else logger.LogError("Failed to set SO {Order} group to Fejlet", failure.Item.SourceOrderNumber.Value);
+        }
+
+        logger.LogInformation("JD request orders: success={Success} marked_oprettet={MarkedCreated} failures={Failures} marked_fejlet={MarkedFailed}",
+            result.SuccessCount, markedCreated, result.Failures.Count, markedFailed);
+
         if (result.Failures.Count > 0)
         {
-            var sample = string.Join(", ", result.Failures.Take(5).Select(f => f.Item.text));
+            var sample = string.Join("; ", result.Failures.Take(5).Select(f => $"{f.Item.text}: {f.Message}"));
             logger.LogWarning("JD request orders upsert failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
         }
     }

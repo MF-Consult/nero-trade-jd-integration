@@ -104,11 +104,14 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         var queryApi = await connectionManager.CreateQueryApiAsync();
 
         var orders = await queryApi.Query<DebtorOrderClient>((IEnumerable<PropValuePair>?)null);
-        // An empty Group means the order has not yet been pushed to JD. Once it is, SyncSalesOrdersToJd
-        // sets Group = "Oprettet", and SyncRequestOrderStatusToUniconta later replaces it with the live
-        // JD status — either way the order stops being re-processed (and re-PDF'd) here.
+        // An empty Group means the order has not yet been pushed to JD; "Fejlet" means a previous push
+        // failed and is parked until a user re-sets Xoverfor1. On success SyncSalesOrdersToJd sets Group =
+        // "Oprettet", and SyncRequestOrderStatusToUniconta later replaces it with the live JD status —
+        // either way the order then stops being re-processed (and re-PDF'd) here.
         var filteredOrders = (orders ?? Enumerable.Empty<DebtorOrderClient>())
-            .Where(o => o != null && o.GetUserFieldBoolean(UnicontaUserFields.SalesOrderTransferFlag) && string.IsNullOrWhiteSpace(o.Group))
+            .Where(o => o != null
+                && o.GetUserFieldBoolean(UnicontaUserFields.SalesOrderTransferFlag)
+                && (string.IsNullOrWhiteSpace(o.Group) || string.Equals(o.Group, SalesOrderJdGroup.Failed, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         if (filteredOrders.Count == 0)
@@ -257,6 +260,39 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
             if (result != ErrorCodes.Succes)
             {
                 _logger.LogError("Failed to update status group for order {OrderNumber}. Uniconta Error: {Error}", orderNumber, result);
+                return false;
+            }
+
+            return true;
+        });
+
+    public Task<bool> SetSalesOrderStatusAsync(int orderNumber, string group, IReadOnlyDictionary<string, object> userFields, CancellationToken cancellationToken)
+        => connectionManager.ExecuteWithRetryAsync(async () =>
+        {
+            var queryApi = await connectionManager.CreateQueryApiAsync();
+            var crudApi = await connectionManager.CreateCrudApiAsync();
+
+            var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), orderNumber.ToString()) };
+            var orders = await queryApi.Query<DebtorOrderClient>(filter);
+            var order = (orders ?? Enumerable.Empty<DebtorOrderClient>()).FirstOrDefault();
+
+            if (order == null)
+            {
+                _logger.LogWarning("Could not find sales order {OrderNumber} in Uniconta for status update", orderNumber);
+                return false;
+            }
+
+            // Update against a snapshot of the loaded state so Uniconta persists the changes.
+            var original = StreamingManager.Clone(order);
+            order.Group = group;
+            foreach (var (name, value) in userFields)
+                order.SetUserField(name, value);
+
+            var result = await crudApi.Update(order, original);
+
+            if (result != ErrorCodes.Succes)
+            {
+                _logger.LogError("Failed to update status (group={Group}) on sales order {OrderNumber}. Uniconta Error: {Error}", group, orderNumber, result);
                 return false;
             }
 

@@ -17,6 +17,9 @@ public static class UnicontaUserFields
     // Process-status field on the purchase order (a value-list user field).
     public const string PurchaseOrderJdStatus = "xJDStatus";
 
+    // Free-text field where the integration writes the reason an order could not be pushed to JD.
+    public const string IntegrationIssue = "xIntegrationIssue";
+
     // Sales order fields.
     public const string DeliveryDate = "xUdleveringsdato";
     public const string TrackingNote = "xSporingsnote";
@@ -55,4 +58,5 @@ public static class PurchaseOrderJdStatusValues
 public static class SalesOrderJdGroup
 {
     public const string Created = "Oprettet";
+    public const string Failed = "Fejlet";
 }

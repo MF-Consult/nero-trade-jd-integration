@@ -120,15 +120,16 @@ public sealed class JdRepository : IJdRepository
         return (true, (int)response.StatusCode, body);
     }
 
-    public async Task<IReadOnlyList<JdIncomingShipment>> GetIncomingShipmentsAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<JdIncomingShipment>> GetIncomingShipmentsAsync(CancellationToken cancellationToken, int? status = 1)
     {
         var results = new List<JdIncomingShipment>();
         var page = 1;
         var pageSize = 200;
-        var approvedStatus = 1;
         while (true)
         {
-            var qs = $"pageNumber={page}&pageSize={pageSize}&status={approvedStatus}";
+            var qs = $"pageNumber={page}&pageSize={pageSize}";
+            if (status.HasValue)
+                qs += $"&status={status.Value}";
             var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/incomingshipments?{qs}"), cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
