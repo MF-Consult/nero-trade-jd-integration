@@ -13,6 +13,7 @@ public sealed class UnicontaConnectionManager : IDisposable
 {
     private readonly ILogger<UnicontaConnectionManager> _logger;
     private readonly UnicontaConfig _config;
+    private readonly SemaphoreSlim _connectGate = new(1, 1);
     private UnicontaConnection? _connection;
     private Session? _session;
     private Company? _company;
@@ -43,19 +44,37 @@ public sealed class UnicontaConnectionManager : IDisposable
         return _company!;
     }
 
+    public bool IsConnected => IsHealthy;
+
+    private bool IsHealthy => _isLoggedIn && _session != null && _company != null;
+    private bool IsFresh => DateTime.UtcNow - _connectedAtUtc <= MaxSessionAge;
+
     private async Task EnsureConnectedAsync()
     {
-        if (_isLoggedIn && _session != null && _company != null)
+        if (IsHealthy && IsFresh)
+            return;
+
+        // Serialize (re)connects. Several timer-triggered functions can fire at the same time, and
+        // concurrent LoginAsync / OpenCompany calls on the shared session/company corrupt the
+        // connection state (observed: cold-start invocations all failing with "Failed to get company").
+        await _connectGate.WaitAsync();
+        try
         {
-            if (DateTime.UtcNow - _connectedAtUtc <= MaxSessionAge)
+            if (IsHealthy && IsFresh)
                 return;
 
-            _logger.LogInformation("Uniconta session is older than {Age}, reconnecting proactively", MaxSessionAge);
-            await ReconnectAsync();
-            return;
-        }
+            if (IsHealthy)
+            {
+                _logger.LogInformation("Uniconta session is older than {Age}, reconnecting proactively", MaxSessionAge);
+                ResetConnection();
+            }
 
-        await ConnectAsync();
+            await ConnectAsync();
+        }
+        finally
+        {
+            _connectGate.Release();
+        }
     }
 
     /// <summary>
@@ -105,13 +124,63 @@ public sealed class UnicontaConnectionManager : IDisposable
         return _connection;
     }
 
-    private async Task ConnectAsync()
+    public async Task<CrudAPI> CreateCrudApiAsync()
     {
+        await EnsureConnectedAsync();
+        return new CrudAPI(_session!, _company!);
+    }
+
+    public async Task<QueryAPI> CreateQueryApiAsync()
+    {
+        await EnsureConnectedAsync();
+        return new QueryAPI(_session!, _company!);
+    }
+
+    public async Task ReconnectAsync()
+    {
+        var staleStamp = _connectedAtUtc;
+        await _connectGate.WaitAsync();
         try
         {
-            if (_isLoggedIn && _session != null && _company != null)
+            if (IsHealthy && _connectedAtUtc != staleStamp)
+            {
+                // Another caller already reconnected while we were waiting on the gate.
                 return;
+            }
 
+            _logger.LogInformation("Reconnecting to Uniconta...");
+            ResetConnection();
+            await ConnectAsync();
+        }
+        finally
+        {
+            _connectGate.Release();
+        }
+    }
+
+    private void ResetConnection()
+    {
+        _isLoggedIn = false;
+        try
+        {
+            _session?.LogOut();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error logging out previous Uniconta session");
+        }
+        _session = null;
+        _company = null;
+    }
+
+    // Caller must hold _connectGate.
+    private async Task ConnectAsync()
+    {
+        if (IsHealthy)
+            return;
+
+        try
+        {
             _logger.LogInformation("Establishing Uniconta connection...");
             _connection = new UnicontaConnection(APITarget.Live);
             _session = new Session(_connection);
@@ -145,35 +214,11 @@ public sealed class UnicontaConnectionManager : IDisposable
         {
             _logger.LogError(ex, "Failed to establish Uniconta connection");
             _isLoggedIn = false;
+            _session = null;
+            _company = null;
             throw;
         }
     }
-
-    public async Task<CrudAPI> CreateCrudApiAsync()
-    {
-        var session = await GetSessionAsync();
-        var company = await GetCompanyAsync();
-        return new CrudAPI(session, company);
-    }
-
-    public async Task<QueryAPI> CreateQueryApiAsync()
-    {
-        var session = await GetSessionAsync();
-        var company = await GetCompanyAsync();
-        return new QueryAPI(session, company);
-    }
-
-    public async Task ReconnectAsync()
-    {
-        _logger.LogInformation("Reconnecting to Uniconta...");
-        _isLoggedIn = false;
-        _session?.LogOut();
-        _session = null;
-        _company = null;
-        await ConnectAsync();
-    }
-
-    public bool IsConnected => _isLoggedIn && _session != null && _company != null;
 
     public void Dispose()
     {
@@ -197,9 +242,8 @@ public sealed class UnicontaConnectionManager : IDisposable
             _connection = null;
             _company = null;
             _isLoggedIn = false;
+            _connectGate.Dispose();
             _disposed = true;
         }
     }
 }
-
-
