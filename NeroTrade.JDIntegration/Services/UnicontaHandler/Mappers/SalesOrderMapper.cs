@@ -56,7 +56,6 @@ public static class CountryHelper
         ["CHINA"] = ("CN", "China"),
         ["INDIA"] = ("IN", "India"),
         ["BRAZIL"] = ("BR", "Brazil"),
-        ["BRAZIL"] = ("BR", "Brazil"),
         ["SOUTH AFRICA"] = ("ZA", "South Africa"),
         ["RUSSIA"] = ("RU", "Russia"),
         ["РОССИЯ"] = ("RU", "Russia"),

@@ -3,6 +3,7 @@ using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
+using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
 
 namespace NeroTrade.JDIntegration.Functions;
 
@@ -27,9 +28,9 @@ public class SyncReceivedQuantityToUniconta(
             logger.LogInformation("Fetching Incoming Shipments from JD...");
             var allShipments = await jd.GetIncomingShipmentsAsync(token);
             
-            // Filter for completed shipments (Status = 1) and modified within last 24h
-            //var cutoffTime = DateTime.UtcNow.AddHours(-24);
-            var cutoffTime = DateTime.UtcNow.AddYears(-24);
+            // Filter for completed shipments (Status = 1) and modified within last 24h.
+            // The function runs every 5 minutes; a 24h window gives ample overlap so nothing is missed.
+            var cutoffTime = DateTime.UtcNow.AddDays(-1);
             var relevantShipments = allShipments
                 .Where(s => s.status == 1 && s.modifiedOn >= cutoffTime)
                 .ToList();
@@ -55,9 +56,9 @@ public class SyncReceivedQuantityToUniconta(
                     continue;
                 }
 
-                // Update "xRecievedByJD" to true on the Purchase Order header
+                // Mark the Purchase Order header as received by JD.
                 // We do this regardless of line items, as long as we have identified the PO.
-                await uniconta.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, "xRecievedByJD", true, token);
+                await uniconta.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, UnicontaUserFields.ReceivedByJd, true, token);
 
                 // Fetch full details to get registered items
                 var shipment = await jd.GetIncomingShipmentByIdAsync(summary.id.Value, token);

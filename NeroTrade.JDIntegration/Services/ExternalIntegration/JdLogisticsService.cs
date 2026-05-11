@@ -6,12 +6,13 @@ using Repositories;
 
 public sealed class JdLogisticsService(
     IJdRepository repository,
+    JdReadCache cache,
     ILogger<JdLogisticsService> logger)
     : IJdLogisticsService
 {
     private readonly ILogger<JdLogisticsService> _logger = logger;
-    private Dictionary<string, JdAddress>? _existingByAtt;
-    private Dictionary<string, JdCatalogItem>? _existingItemsBySku;
+    private IDictionary<string, JdAddress>? _existingByAtt;
+    private IDictionary<string, JdCatalogItem>? _existingItemsBySku;
     private IReadOnlyList<JdContainerType>? _containerTypes;
 
     /// <summary>
@@ -22,14 +23,7 @@ public sealed class JdLogisticsService(
     /// <returns>Upsert result.</returns>
     public async Task<UpsertResult<JdAddress>> UpsertAddressesAsync(IEnumerable<JdAddress> addresses, CancellationToken cancellationToken)
     {
-        /*_existingByAtt ??= (await repository.GetAddressesAsync(cancellationToken))
-            .Where(a => !string.IsNullOrWhiteSpace(a.att))
-            .GroupBy(a => a.att!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);*/
-        _existingByAtt ??= (await repository.GetAddressesAsync(cancellationToken))
-            //.Where(a => !string.IsNullOrWhiteSpace(a.att))
-            .GroupBy(a => a.att?? string.Empty, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        _existingByAtt = await cache.GetAddressesByAttAsync(() => repository.GetAddressesAsync(cancellationToken), cancellationToken);
 
         var result = new UpsertResult<JdAddress>();
         foreach (var address in addresses)
@@ -70,10 +64,7 @@ public sealed class JdLogisticsService(
     /// <returns>Upsert result.</returns>
     public async Task<UpsertResult<JdCatalogItem>> UpsertItemsAsync(IEnumerable<JdCatalogItem> items, CancellationToken cancellationToken)
     {
-        _existingItemsBySku ??= (await repository.GetCatalogItemsAsync(cancellationToken))
-            .Where(i => !string.IsNullOrWhiteSpace(i.sku))
-            .GroupBy(i => i.sku!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        _existingItemsBySku = await cache.GetItemsBySkuAsync(() => repository.GetCatalogItemsAsync(cancellationToken), cancellationToken);
 
         var result = new UpsertResult<JdCatalogItem>();
         foreach (var item in items)
@@ -110,12 +101,8 @@ public sealed class JdLogisticsService(
     // Incoming shipments (purchase orders)
     public async Task<CreateResult<JdIncomingShipmentCreate>> CreateIncomingShipmentsAsync(IEnumerable<JdIncomingShipmentCreate> shipments, CancellationToken cancellationToken)
     {
-        _existingItemsBySku ??= (await repository.GetCatalogItemsAsync(cancellationToken))
-            .Where(i => !string.IsNullOrWhiteSpace(i.sku))
-            .GroupBy(i => i.sku!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-
-        _containerTypes ??= await repository.GetContainerTypesAsync(cancellationToken);
+        _existingItemsBySku = await cache.GetItemsBySkuAsync(() => repository.GetCatalogItemsAsync(cancellationToken), cancellationToken);
+        _containerTypes = await cache.GetContainerTypesAsync(() => repository.GetContainerTypesAsync(cancellationToken), cancellationToken);
 
         var result = new CreateResult<JdIncomingShipmentCreate>();
         foreach (var shipment in shipments)

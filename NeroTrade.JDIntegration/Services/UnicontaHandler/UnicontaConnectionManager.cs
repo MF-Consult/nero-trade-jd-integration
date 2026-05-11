@@ -18,6 +18,12 @@ public sealed class UnicontaConnectionManager : IDisposable
     private Company? _company;
     private bool _isLoggedIn;
     private bool _disposed;
+    private DateTime _connectedAtUtc;
+
+    // The connection manager is a singleton, so a session can live for the lifetime of the worker
+    // process. Uniconta sessions time out server-side after a period of inactivity (and can also be
+    // dropped by nightly server restarts), so we proactively reconnect once a session reaches this age.
+    private static readonly TimeSpan MaxSessionAge = TimeSpan.FromMinutes(30);
 
     public UnicontaConnectionManager(ILogger<UnicontaConnectionManager> logger, UnicontaConfig config)
     {
@@ -27,20 +33,69 @@ public sealed class UnicontaConnectionManager : IDisposable
 
     public async Task<Session> GetSessionAsync()
     {
-        if (_session != null && _isLoggedIn)
-            return _session;
-
-        await ConnectAsync();
+        await EnsureConnectedAsync();
         return _session!;
     }
 
     public async Task<Company> GetCompanyAsync()
     {
-        if (_company != null && _isLoggedIn)
-            return _company;
+        await EnsureConnectedAsync();
+        return _company!;
+    }
+
+    private async Task EnsureConnectedAsync()
+    {
+        if (_isLoggedIn && _session != null && _company != null)
+        {
+            if (DateTime.UtcNow - _connectedAtUtc <= MaxSessionAge)
+                return;
+
+            _logger.LogInformation("Uniconta session is older than {Age}, reconnecting proactively", MaxSessionAge);
+            await ReconnectAsync();
+            return;
+        }
 
         await ConnectAsync();
-        return _company!;
+    }
+
+    /// <summary>
+    /// Runs an operation against Uniconta, reconnecting and retrying once if the failure looks like
+    /// an expired/invalid session. Use this around mutating calls so a stale session does not lose work.
+    /// </summary>
+    public async Task<T> ExecuteWithRetryAsync<T>(Func<Task<T>> operation, int maxRetries = 1)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                await EnsureConnectedAsync();
+                return await operation();
+            }
+            catch (Exception ex) when (attempt < maxRetries && IsAuthFailure(ex))
+            {
+                _logger.LogWarning(ex, "Uniconta call failed in a way that looks like an expired session; reconnecting (attempt {Attempt}/{Max})", attempt + 1, maxRetries);
+                await ReconnectAsync();
+            }
+        }
+    }
+
+    public Task ExecuteWithRetryAsync(Func<Task> operation, int maxRetries = 1)
+        => ExecuteWithRetryAsync(async () =>
+        {
+            await operation();
+            return true;
+        }, maxRetries);
+
+    private static bool IsAuthFailure(Exception ex)
+    {
+        // Uniconta does not surface a single, documented "session expired" exception type. Start broad
+        // (message-based, plus NullReferenceException from internal session state) and tighten this once
+        // App Insights shows what is actually thrown in production.
+        var message = ex.Message ?? string.Empty;
+        return ex is NullReferenceException
+            || message.Contains("session", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("login", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("not logged", StringComparison.OrdinalIgnoreCase);
     }
 
     public UnicontaConnection GetConnection()
@@ -83,6 +138,7 @@ public sealed class UnicontaConnectionManager : IDisposable
             if (_company == null)
                 throw new InvalidOperationException($"Failed to get company with ID: {_config.CompanyId}");
 
+            _connectedAtUtc = DateTime.UtcNow;
             _logger.LogInformation("Successfully connected to company: {CompanyName} (ID: {CompanyId})", _company.Name, _company.CompanyId);
         }
         catch (Exception ex)

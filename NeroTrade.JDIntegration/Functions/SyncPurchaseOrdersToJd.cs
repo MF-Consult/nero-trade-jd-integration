@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Models.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
+using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Models;
 
@@ -60,7 +61,7 @@ public sealed class SyncPurchaseOrdersToJd(
         {
             if (item.SourcePurchaseNumber.HasValue)
             {
-                var success = await uniconta.SetPurchaseOrderHeaderFieldAsync(item.SourcePurchaseNumber.Value, "xCreatedAtJD", true, ct);
+                var success = await uniconta.SetPurchaseOrderHeaderFieldAsync(item.SourcePurchaseNumber.Value, UnicontaUserFields.CreatedAtJd, true, ct);
                 if (success) markedCount++;
                 else logger.LogError("Failed to mark PO {Po} as CreatedAtJD in Uniconta", item.SourcePurchaseNumber.Value);
             }

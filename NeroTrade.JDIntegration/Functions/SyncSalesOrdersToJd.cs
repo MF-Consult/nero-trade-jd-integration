@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
 using NeroTrade.JDIntegration.Models.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
+using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Models;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Repositories;
@@ -39,10 +40,9 @@ public sealed class SyncSalesOrdersToJd(
         // Build RequestOrder from Sales Orders (DebtorOrderClient) per user's mapping
         var batch = new List<JdRequestOrderCreate>(capacity: 200);
 
-        // Get all delivery notes for debtors to process files
-        var deliveryNotesByDebtor = await LoadDeliveryNotesByDebtorAsync(cts.Token);
-        var totalDeliveryNotes = deliveryNotesByDebtor.Sum(kvp => kvp.Value.Count);
-        logger.LogInformation("Found {Count} delivery notes for processing", totalDeliveryNotes);
+        // Existing Uniconta delivery notes are not yet wired up (see UnicontaRepository.ReadDebtorDeliveryNotesAsync).
+        // TODO: Populate this once ReadDebtorDeliveryNotesAsync is implemented.
+        var deliveryNotesByDebtor = new Dictionary<string?, List<DebtorDeliveryNoteInfo>>(StringComparer.OrdinalIgnoreCase);
 
         await foreach (var so in uniconta.ReadSalesOrdersBatchedAsync(200, cts.Token))
         {
@@ -86,7 +86,7 @@ public sealed class SyncSalesOrdersToJd(
             if (order.SourceOrderNumber.HasValue && !failedOrderNumbers.Contains(order.SourceOrderNumber.Value))
             {
                 var success = await uniconta.SetSalesOrderHeaderFieldAsync(
-                    order.SourceOrderNumber.Value, "xCreatedAtJD", true, ct);
+                    order.SourceOrderNumber.Value, UnicontaUserFields.CreatedAtJd, true, ct);
                 if (success) markedCount++;
                 else logger.LogError("Failed to mark SO {Order} as CreatedAtJD", order.SourceOrderNumber.Value);
             }
@@ -100,26 +100,6 @@ public sealed class SyncSalesOrdersToJd(
             var sample = string.Join(", ", result.Failures.Take(5).Select(f => f.Item.text));
             logger.LogWarning("JD request orders upsert failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
         }
-    }
-
-    private async Task<Dictionary<string?, List<DebtorDeliveryNoteInfo>>> LoadDeliveryNotesByDebtorAsync(CancellationToken cancellationToken)
-    {
-        var deliveryNotesByDebtor = new Dictionary<string?, List<DebtorDeliveryNoteInfo>>(StringComparer.OrdinalIgnoreCase);
-
-        await foreach (var note in uniconta.ReadDebtorDeliveryNotesAsync(cancellationToken))
-        {
-            if (note.DebtorAccount == null) continue;
-
-            if (!deliveryNotesByDebtor.TryGetValue(note.DebtorAccount, out var list))
-            {
-                list = new List<DebtorDeliveryNoteInfo>();
-                deliveryNotesByDebtor[note.DebtorAccount] = list;
-            }
-
-            list.Add(note);
-        }
-
-        return deliveryNotesByDebtor;
     }
 
     /// <summary>

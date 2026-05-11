@@ -77,9 +77,6 @@ public class SyncRequestOrderStatusToUniconta
 
                 int orderNumber = JdOrderHelper.GetOrderNumber(jdOrder.shopOrderId, jdOrder.text);
 
-                if (jdOrder.id == 6585)
-                    orderNumber = 1472;
-                
                 if (orderNumber == 0)
                 {
                     // Could not parse order number

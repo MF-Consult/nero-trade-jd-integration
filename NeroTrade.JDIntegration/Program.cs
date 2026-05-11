@@ -29,6 +29,7 @@ builder.Services.Configure<StatusMappingConfig>(builder.Configuration.GetSection
 
 // Typed HttpClient + repositories for JD
 builder.Services.AddHttpClient<IJdRepository, JdRepository>();
+builder.Services.AddSingleton<JdReadCache>();
 builder.Services.AddScoped<IJdLogisticsService, JdLogisticsService>();
 
 // Uniconta services
