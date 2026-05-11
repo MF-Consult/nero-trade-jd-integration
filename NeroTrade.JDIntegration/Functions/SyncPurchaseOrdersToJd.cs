@@ -55,20 +55,37 @@ public sealed class SyncPurchaseOrdersToJd(
             logger.LogWarning("Incoming shipments create failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
         }
 
-        // Mark successful orders as created in Uniconta
-        int markedCount = 0;
+        // Created (or already present) in JD: status = Oprettet, and consume the transfer trigger.
+        int markedCreated = 0;
         foreach (var item in result.CreatedItems)
         {
-            if (item.SourcePurchaseNumber.HasValue)
+            if (!item.SourcePurchaseNumber.HasValue) continue;
+            var ok = await uniconta.SetPurchaseOrderHeaderFieldsAsync(item.SourcePurchaseNumber.Value, new Dictionary<string, object>
             {
-                var success = await uniconta.SetPurchaseOrderHeaderFieldAsync(item.SourcePurchaseNumber.Value, UnicontaUserFields.CreatedAtJd, true, ct);
-                if (success) markedCount++;
-                else logger.LogError("Failed to mark PO {Po} as CreatedAtJD in Uniconta", item.SourcePurchaseNumber.Value);
-            }
+                [UnicontaUserFields.PurchaseOrderJdStatus] = PurchaseOrderJdStatusValues.Created,
+                [UnicontaUserFields.PurchaseOrderTransferFlag] = false,
+            }, ct);
+            if (ok) markedCreated++;
+            else logger.LogError("Failed to set PO {Po} status to Oprettet in Uniconta", item.SourcePurchaseNumber.Value);
         }
 
-        logger.LogInformation("JD incoming shipments create batch success={Success} marked_uniconta={Marked} failures={Failures}", 
-            result.SuccessCount, markedCount, result.Failures.Count);
+        // Rejected by JD: park for manual handling and consume the transfer trigger. It will only be
+        // retried once a user sets xTransferToJD again (status is then "Manuel handling" or empty).
+        int markedManual = 0;
+        foreach (var failure in result.Failures)
+        {
+            if (!failure.Item.SourcePurchaseNumber.HasValue) continue;
+            var ok = await uniconta.SetPurchaseOrderHeaderFieldsAsync(failure.Item.SourcePurchaseNumber.Value, new Dictionary<string, object>
+            {
+                [UnicontaUserFields.PurchaseOrderJdStatus] = PurchaseOrderJdStatusValues.ManualHandling,
+                [UnicontaUserFields.PurchaseOrderTransferFlag] = false,
+            }, ct);
+            if (ok) markedManual++;
+            else logger.LogError("Failed to set PO {Po} status to Manuel handling in Uniconta", failure.Item.SourcePurchaseNumber.Value);
+        }
+
+        logger.LogInformation("JD incoming shipments batch: created_or_exists={Created} marked_oprettet={MarkedCreated} failures={Failures} marked_manuel={MarkedManual}",
+            result.SuccessCount, markedCreated, result.Failures.Count, markedManual);
     }
 }
 

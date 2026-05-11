@@ -60,7 +60,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
         var orders = await queryApi.Query<CreditorOrderClient>((IEnumerable<PropValuePair>?)null);
-        foreach (var o in (orders ?? Enumerable.Empty<CreditorOrderClient>()).Where(o => o != null && o.GetUserFieldBoolean(UnicontaUserFields.PurchaseOrderTransferFlag) && !o.GetUserFieldBoolean(UnicontaUserFields.CreatedAtJd)))
+        foreach (var o in (orders ?? Enumerable.Empty<CreditorOrderClient>()).Where(o => o != null && o.GetUserFieldBoolean(UnicontaUserFields.PurchaseOrderTransferFlag) && PurchaseOrderJdStatusValues.IsPending(o.GetUserField(UnicontaUserFields.PurchaseOrderJdStatus) as string)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var po = new LocalPurchaseOrder
@@ -104,8 +104,11 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         var queryApi = await connectionManager.CreateQueryApiAsync();
 
         var orders = await queryApi.Query<DebtorOrderClient>((IEnumerable<PropValuePair>?)null);
+        // An empty Group means the order has not yet been pushed to JD. Once it is, SyncSalesOrdersToJd
+        // sets Group = "Oprettet", and SyncRequestOrderStatusToUniconta later replaces it with the live
+        // JD status — either way the order stops being re-processed (and re-PDF'd) here.
         var filteredOrders = (orders ?? Enumerable.Empty<DebtorOrderClient>())
-            .Where(o => o != null && o.GetUserFieldBoolean(UnicontaUserFields.SalesOrderTransferFlag) && !o.GetUserFieldBoolean(UnicontaUserFields.CreatedAtJd))
+            .Where(o => o != null && o.GetUserFieldBoolean(UnicontaUserFields.SalesOrderTransferFlag) && string.IsNullOrWhiteSpace(o.Group))
             .ToList();
 
         if (filteredOrders.Count == 0)
@@ -309,12 +312,14 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         });
 
     public Task<bool> SetPurchaseOrderHeaderFieldAsync(int purchaseNumber, string fieldName, object value, CancellationToken cancellationToken)
+        => SetPurchaseOrderHeaderFieldsAsync(purchaseNumber, new Dictionary<string, object> { [fieldName] = value }, cancellationToken);
+
+    public Task<bool> SetPurchaseOrderHeaderFieldsAsync(int purchaseNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
         => connectionManager.ExecuteWithRetryAsync(async () =>
         {
             var queryApi = await connectionManager.CreateQueryApiAsync();
             var crudApi = await connectionManager.CreateCrudApiAsync();
 
-            // 1. Find the purchase order
             var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), purchaseNumber.ToString()) };
             var orders = await queryApi.Query<CreditorOrderClient>(filter);
             var order = (orders ?? Enumerable.Empty<CreditorOrderClient>()).FirstOrDefault();
@@ -325,47 +330,16 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 return false;
             }
 
-            // 2. Update the user field against a snapshot of the loaded state so Uniconta persists the change.
+            // Update against a snapshot of the loaded state so Uniconta persists the change.
             var original = StreamingManager.Clone(order);
-            order.SetUserField(fieldName, value);
+            foreach (var (name, value) in fields)
+                order.SetUserField(name, value);
 
             var result = await crudApi.Update(order, original);
 
             if (result != ErrorCodes.Succes)
             {
-                _logger.LogError("Failed to update field {FieldName} on purchase order {OrderNumber}. Uniconta Error: {Error}", fieldName, purchaseNumber, result);
-                return false;
-            }
-
-            return true;
-        });
-
-    public Task<bool> SetSalesOrderHeaderFieldAsync(int orderNumber, string fieldName, object value, CancellationToken cancellationToken)
-        => connectionManager.ExecuteWithRetryAsync(async () =>
-        {
-            var queryApi = await connectionManager.CreateQueryApiAsync();
-            var crudApi = await connectionManager.CreateCrudApiAsync();
-
-            // 1. Find the sales order
-            var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), orderNumber.ToString()) };
-            var orders = await queryApi.Query<DebtorOrderClient>(filter);
-            var order = (orders ?? Enumerable.Empty<DebtorOrderClient>()).FirstOrDefault();
-
-            if (order == null)
-            {
-                _logger.LogWarning("Could not find sales order {OrderNumber} in Uniconta for header update", orderNumber);
-                return false;
-            }
-
-            // 2. Update the user field against a snapshot of the loaded state so Uniconta persists the change.
-            var original = StreamingManager.Clone(order);
-            order.SetUserField(fieldName, value);
-
-            var result = await crudApi.Update(order, original);
-
-            if (result != ErrorCodes.Succes)
-            {
-                _logger.LogError("Failed to update field {FieldName} on sales order {OrderNumber}. Uniconta Error: {Error}", fieldName, orderNumber, result);
+                _logger.LogError("Failed to update fields [{Fields}] on purchase order {OrderNumber}. Uniconta Error: {Error}", string.Join(", ", fields.Keys), purchaseNumber, result);
                 return false;
             }
 

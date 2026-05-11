@@ -56,9 +56,9 @@ public class SyncReceivedQuantityToUniconta(
                     continue;
                 }
 
-                // Mark the Purchase Order header as received by JD.
+                // Mark the Purchase Order as fully handled in JD.
                 // We do this regardless of line items, as long as we have identified the PO.
-                await uniconta.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, UnicontaUserFields.ReceivedByJd, true, token);
+                await uniconta.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, UnicontaUserFields.PurchaseOrderJdStatus, PurchaseOrderJdStatusValues.Completed, token);
 
                 // Fetch full details to get registered items
                 var shipment = await jd.GetIncomingShipmentByIdAsync(summary.id.Value, token);

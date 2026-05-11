@@ -79,20 +79,21 @@ public sealed class SyncSalesOrdersToJd(
             .Select(f => f.Item.SourceOrderNumber!.Value)
             .ToHashSet();
 
-        // Mark successful orders as created in Uniconta
+        // Lock successfully-handled orders so they are not re-processed (re-PDF'd) next run.
+        // SyncRequestOrderStatusToUniconta later replaces this group with the live JD status.
         int markedCount = 0;
         foreach (var order in batch)
         {
             if (order.SourceOrderNumber.HasValue && !failedOrderNumbers.Contains(order.SourceOrderNumber.Value))
             {
-                var success = await uniconta.SetSalesOrderHeaderFieldAsync(
-                    order.SourceOrderNumber.Value, UnicontaUserFields.CreatedAtJd, true, ct);
+                var success = await uniconta.UpdateSalesOrderGroupAsync(
+                    order.SourceOrderNumber.Value, SalesOrderJdGroup.Created, ct);
                 if (success) markedCount++;
-                else logger.LogError("Failed to mark SO {Order} as CreatedAtJD", order.SourceOrderNumber.Value);
+                else logger.LogError("Failed to set SO {Order} group to Oprettet", order.SourceOrderNumber.Value);
             }
         }
 
-        logger.LogInformation("JD request orders upsert success={Success} marked_uniconta={Marked} failures={Failures}", 
+        logger.LogInformation("JD request orders upsert success={Success} marked_uniconta={Marked} failures={Failures}",
             result.SuccessCount, markedCount, result.Failures.Count);
         
         if (result.Failures.Count > 0)

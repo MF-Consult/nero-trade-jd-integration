@@ -14,9 +14,8 @@ public static class UnicontaUserFields
     public const string SalesOrderTransferFlag = "Xoverfor1";
     public const string PurchaseOrderTransferFlag = "xTransferToJD";
 
-    // State flags — set by the integration after a successful push.
-    public const string CreatedAtJd = "xCreatedAtJD";
-    public const string ReceivedByJd = "xReceivedByJD";
+    // Process-status field on the purchase order (a value-list user field).
+    public const string PurchaseOrderJdStatus = "xJDStatus";
 
     // Sales order fields.
     public const string DeliveryDate = "xUdleveringsdato";
@@ -30,4 +29,30 @@ public static class UnicontaUserFields
 
     // Item references.
     public const string ExternalSku = "xExternalSku";
+}
+
+/// <summary>
+/// Values for the purchase order <see cref="UnicontaUserFields.PurchaseOrderJdStatus"/> field.
+/// Must match the value list configured on the field in Uniconta.
+/// </summary>
+public static class PurchaseOrderJdStatusValues
+{
+    public const string Created = "Oprettet";
+    public const string ManualHandling = "Manuel handling";
+    public const string Completed = "Færdigbehandlet";
+
+    /// <summary>True when the integration should (re)process the order: never sent, or parked for manual handling.</summary>
+    public static bool IsPending(string? status)
+        => string.IsNullOrWhiteSpace(status)
+           || string.Equals(status, ManualHandling, StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// The built-in <c>Group</c> value a sales order receives once its request order has been created in JD.
+/// It acts as the "already sent" lock; <c>SyncRequestOrderStatusToUniconta</c> later replaces it with the
+/// live JD status. Must exist in the order group value list in Uniconta.
+/// </summary>
+public static class SalesOrderJdGroup
+{
+    public const string Created = "Oprettet";
 }
