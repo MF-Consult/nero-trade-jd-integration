@@ -152,13 +152,20 @@ public sealed class SalesOrderMapper
         // Get country information
         var (countryCode, countryName) = CountryHelper.GetCountryInfo(so.DeliveryCountryCode);
 
+        // Per JD (Mikkel, 2026-05-12): the "SO {n} - {remark}" reference goes in deliveryNoteText, not text.
+        // JdOrderHelper falls back to deliveryNoteText when identifying the order on read-back.
+        var soReference = $"SO {so.OrderNumber} - {so.RemarkText}";
+        var deliveryNoteText = string.IsNullOrWhiteSpace(so.DeliveryNoteText)
+            ? soReference
+            : $"{soReference}\n{so.DeliveryNoteText}";
+
         var create = new JdRequestOrderCreate
         {
             date = finalDeliveryDate,
-            text = $"SO {so.OrderNumber} - {so.RemarkText}",
+            text = null,
             SourceOrderNumber = so.OrderNumber,
             trackingNote = so.TrackingNote,
-            deliveryNoteText = so.DeliveryNoteText,
+            deliveryNoteText = deliveryNoteText,
             disableApprovalEmail = false,
             shipmondo = shipmondo,
             address = new JdAddress

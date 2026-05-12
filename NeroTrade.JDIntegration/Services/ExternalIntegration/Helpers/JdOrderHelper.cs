@@ -13,37 +13,38 @@ public static class JdOrderHelper
     private static readonly Regex PurchaseOrderNumberRegex = new(@"PO\s+(\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>
-    /// Extracts the order number as a string from either shopOrderId or the text field.
-    /// Prioritizes shopOrderId.
+    /// Extracts the order number as a string from shopOrderId, the text field, or (fallback) deliveryNoteText.
+    /// Prioritizes shopOrderId. The deliveryNoteText fallback exists because the "SO {n} - {remark}" reference
+    /// is now written to deliveryNoteText rather than text on outgoing orders.
     /// </summary>
-    public static string? GetOrderNumberString(string? shopOrderId, string? text)
+    public static string? GetOrderNumberString(string? shopOrderId, string? text, string? deliveryNoteText = null)
     {
         if (!string.IsNullOrWhiteSpace(shopOrderId))
         {
             return shopOrderId!.Trim();
         }
 
-        if (string.IsNullOrWhiteSpace(text))
+        return MatchOrderNumber(text) ?? MatchOrderNumber(deliveryNoteText);
+    }
+
+    private static string? MatchOrderNumber(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
         {
             return null;
         }
 
-        var match = OrderNumberRegex.Match(text);
-        if (match.Success)
-        {
-            return match.Groups[1].Value.Trim();
-        }
-
-        return null;
+        var match = OrderNumberRegex.Match(value);
+        return match.Success ? match.Groups[1].Value.Trim() : null;
     }
 
     /// <summary>
-    /// Extracts the order number as an int from either shopOrderId or the text field.
+    /// Extracts the order number as an int from shopOrderId, the text field, or (fallback) deliveryNoteText.
     /// Returns 0 if parsing fails.
     /// </summary>
-    public static int GetOrderNumber(string? shopOrderId, string? text)
+    public static int GetOrderNumber(string? shopOrderId, string? text, string? deliveryNoteText = null)
     {
-        var str = GetOrderNumberString(shopOrderId, text);
+        var str = GetOrderNumberString(shopOrderId, text, deliveryNoteText);
         if (int.TryParse(str, out var val))
         {
             return val;

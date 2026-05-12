@@ -172,9 +172,10 @@ public sealed class JdLogisticsService(
 
     public async Task<UpsertResult<JdRequestOrderCreate>> UpsertRequestOrdersAsync(long inventoryId, IEnumerable<JdRequestOrderCreate> orders, CancellationToken cancellationToken)
     {
-        // Build existing map keyed by shop order identifier
+        // Build existing map keyed by shop order identifier (text first, then deliveryNoteText — the
+        // "SO {n}" reference is written to deliveryNoteText on newer orders).
         var existing = (await repository.GetRequestOrdersAsync(inventoryId, cancellationToken))
-            .Select(r => new { Order = r, Key = JdOrderHelper.GetOrderNumberString(r.shopOrderId, r.text) })
+            .Select(r => new { Order = r, Key = JdOrderHelper.GetOrderNumberString(r.shopOrderId, r.text, r.deliveryNoteText) })
             .Where(x => !string.IsNullOrWhiteSpace(x.Key))
             .GroupBy(x => x.Key!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First().Order, StringComparer.OrdinalIgnoreCase);
@@ -182,7 +183,7 @@ public sealed class JdLogisticsService(
         var result = new UpsertResult<JdRequestOrderCreate>();
         foreach (var order in orders)
         {
-            var key = JdOrderHelper.GetOrderNumberString(order.shopOrderId, order.text);
+            var key = JdOrderHelper.GetOrderNumberString(order.shopOrderId, order.text, order.deliveryNoteText);
             if (string.IsNullOrWhiteSpace(key))
             {
                 result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, 0, "Missing shop order identifier"));

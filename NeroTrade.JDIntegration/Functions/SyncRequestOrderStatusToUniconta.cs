@@ -83,7 +83,7 @@ public class SyncRequestOrderStatusToUniconta
                 // Validate JD Order
                 if (jdOrder.status == null) continue;
 
-                int orderNumber = JdOrderHelper.GetOrderNumber(jdOrder.shopOrderId, jdOrder.text);
+                int orderNumber = JdOrderHelper.GetOrderNumber(jdOrder.shopOrderId, jdOrder.text, jdOrder.deliveryNoteText);
 
                 if (orderNumber == 0)
                 {
