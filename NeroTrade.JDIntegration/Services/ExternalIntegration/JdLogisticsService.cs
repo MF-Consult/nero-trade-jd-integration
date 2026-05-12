@@ -258,7 +258,7 @@ public sealed class JdLogisticsService(
             return true;
         }
 
-        // Compare delivery note text
+        // Compare Shipmondo carrier code
         if (!string.Equals(existing.shipmondo?.carrierCode, incoming.shipmondo?.carrierCode, StringComparison.Ordinal))
         {
             return true;

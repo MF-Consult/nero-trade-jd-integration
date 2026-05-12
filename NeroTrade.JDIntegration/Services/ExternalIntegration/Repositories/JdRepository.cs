@@ -42,7 +42,6 @@ public sealed class JdRepository : IJdRepository
                 _logger.LogWarning("JD GET addresses failed: {Status} {Body}", (int)response.StatusCode, body);
                 break;
             }
-            var body2 = await response.Content.ReadAsStringAsync(cancellationToken);
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             var pagePayload = await JsonSerializer.DeserializeAsync<JdPagedResponse<JdAddress>>(stream, cancellationToken: cancellationToken)
                               ?? new JdPagedResponse<JdAddress>();
@@ -137,7 +136,6 @@ public sealed class JdRepository : IJdRepository
                 _logger.LogWarning("JD GET incoming shipments failed: {Status} {Body}", (int)response.StatusCode, body);
                 break;
             }
-            var body2 = await response.Content.ReadAsStringAsync(cancellationToken);
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             var pagePayload = await JsonSerializer.DeserializeAsync<JdPagedResponse<JdIncomingShipment>>(stream, cancellationToken: cancellationToken)
                               ?? new JdPagedResponse<JdIncomingShipment>();
@@ -196,7 +194,6 @@ public sealed class JdRepository : IJdRepository
         var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/inventories"), cancellationToken);
         if (!response.IsSuccessStatusCode)
             return Array.Empty<JdInventory>();
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var data = await JsonSerializer.DeserializeAsync<List<JdInventory>>(stream, cancellationToken: cancellationToken) ?? new List<JdInventory>();
         return data;
@@ -213,7 +210,6 @@ public sealed class JdRepository : IJdRepository
             var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/inventories/{inventoryId}/requestorders?{qs}"), cancellationToken);
             if (!response.IsSuccessStatusCode)
                 break;
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             var pagePayload = await JsonSerializer.DeserializeAsync<JdPagedResponse<JdRequestOrder>>(stream, cancellationToken: cancellationToken)
                               ?? new JdPagedResponse<JdRequestOrder>();
