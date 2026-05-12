@@ -195,15 +195,31 @@ public sealed class JdLogisticsService(
                 // Check if order needs to be updated (deleted and recreated)
                 if (existingOrder.id.HasValue && RequiresRecreation(existingOrder, order))
                 {
+                    // JD swagger on DELETE /api/inventories/{inventoryid}/requestorders/{id}:
+                    // "If the RequestOrder is approved and pending dispatch it wont be possible."
+                    // Skip recreation rather than fire-and-fail-on-delete, and surface a clear reason.
+                    if (JdRequestOrderStage.IsPastDeletionThreshold(existingOrder.stage))
+                    {
+                        var stageLabel = JdRequestOrderStage.Describe(existingOrder.stage);
+                        _logger.LogWarning(
+                            "Request order {ShopOrderId} (JD id {JdOrderId}) has changed in Uniconta but is already at stage {Stage} in JD — skipping recreation",
+                            key, existingOrder.id, stageLabel);
+                        result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(
+                            order,
+                            0,
+                            $"Existing JD order {existingOrder.id} is at stage {stageLabel} and can no longer be deleted/recreated. Update the order directly in JD or cancel it before re-syncing."));
+                        continue;
+                    }
+
                     _logger.LogInformation("Request order {ShopOrderId} has significant changes, deleting and recreating", key);
-                    
+
                     var deleted = await repository.DeleteRequestOrderAsync(inventoryId, existingOrder.id.Value, cancellationToken);
                     if (!deleted.ok)
                     {
                         result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, deleted.status, $"Failed to delete existing order: {deleted.message}"));
                         continue;
                     }
-                    
+
                     var created = await repository.CreateRequestOrderAsync(inventoryId, order, cancellationToken);
                     if (created.ok) result.SuccessCount++; else result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, created.status, created.message));
                 }
@@ -238,6 +254,12 @@ public sealed class JdLogisticsService(
 
         // Compare delivery note text
         if (!string.Equals(existing.deliveryNoteText, incoming.deliveryNoteText, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // Compare delivery note text
+        if (!string.Equals(existing.shipmondo?.carrierCode, incoming.shipmondo?.carrierCode, StringComparison.Ordinal))
         {
             return true;
         }
