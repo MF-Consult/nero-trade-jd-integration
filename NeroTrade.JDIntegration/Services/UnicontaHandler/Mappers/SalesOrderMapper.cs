@@ -109,10 +109,10 @@ public sealed class SalesOrderMapper
 
             if (carrierCode != null)
             {
-                var productServices = new List<string>();
+                var productServices = new List<string> { ShipmondoServiceCodes.PalletExchange };
                 if (so.DeliveryTime.HasValue)
                 {
-                    productServices.Add("TIMED_DELIVERY");
+                    productServices.Add(ShipmondoServiceCodes.TimedDelivery);
                     // Combine date and time
                     finalDeliveryDate = so.DeliveryDate?.Date.Add(so.DeliveryTime.Value.TimeOfDay);
                 }
@@ -130,10 +130,10 @@ public sealed class SalesOrderMapper
         }
         else if (so.TransportType == "Ekstern Transport")
         {
-            var productServices = new List<string>();
+            var productServices = new List<string> { ShipmondoServiceCodes.PalletExchange };
             if (so.DeliveryTime.HasValue)
             {
-                productServices.Add("TIMED_DELIVERY");
+                productServices.Add(ShipmondoServiceCodes.TimedDelivery);
                 // Combine date and time
                 finalDeliveryDate = so.DeliveryDate?.Date.Add(so.DeliveryTime.Value.TimeOfDay);
             }
