@@ -1,3 +1,8 @@
+// SyncDebtorsToJd is currently disabled — the debtor → JD address sync is not in use.
+// The supporting code (DebtorMapper, IUnicontaService.ReadDebtorsBatchedAsync,
+// IJdLogisticsService.UpsertAddressesAsync, etc.) is left in place but unused; uncomment
+// this file to re-enable the function.
+/*
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
@@ -91,3 +96,4 @@ public sealed class SyncDebtorsToJd(
         return (batch.Count, result.SuccessCount, result.Failures.Count);
     }
 }
+*/
