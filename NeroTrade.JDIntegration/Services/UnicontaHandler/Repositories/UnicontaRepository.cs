@@ -149,7 +149,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 DeliveryCity = o._DeliveryCity ?? debtor?._City,
                 DeliveryCountryCode = debtor?._Country == 0 ? "DK" : debtor?._Country.ToString(),
                 // Additional fields for JD mapping
-                DeliveryDate = o.GetUserField(UnicontaUserFields.DeliveryDate) as DateTime?,
+                DeliveryDate = o._DeliveryDate == default ? null : o._DeliveryDate,
                 TrackingNote = o.GetUserField(UnicontaUserFields.TrackingNote) as string,
                 DeliveryNoteText = o.GetUserField(UnicontaUserFields.DeliveryNoteText) as string,
                 RemarkText = o.GetUserField(UnicontaUserFields.Remark) as string,

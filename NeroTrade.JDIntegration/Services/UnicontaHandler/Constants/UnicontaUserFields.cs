@@ -21,7 +21,6 @@ public static class UnicontaUserFields
     public const string IntegrationIssue = "xIntegrationIssue";
 
     // Sales order fields.
-    public const string DeliveryDate = "xUdleveringsdato";
     public const string TrackingNote = "xSporingsnote";
     public const string DeliveryNoteText = "xNoteflgseddel";
     public const string Remark = "xBemaerk";
