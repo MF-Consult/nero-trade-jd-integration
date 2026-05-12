@@ -4,7 +4,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NeroTrade.JDIntegration.Models.Settings;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
+using NeroTrade.JDIntegration.Services.Logging;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
+using System.Text.Json;
 
 namespace NeroTrade.JDIntegration.Functions;
 
@@ -13,17 +15,23 @@ public class SyncRequestOrderStatusToUniconta
     private readonly IJdLogisticsService _jd;
     private readonly IUnicontaService _uniconta;
     private readonly StatusMappingConfig _config;
+    private readonly IIntegrationLogger _integrationLogger;
+    private readonly SupabaseOptions _supabaseOptions;
     private readonly ILogger<SyncRequestOrderStatusToUniconta> _logger;
 
     public SyncRequestOrderStatusToUniconta(
         IJdLogisticsService jd,
         IUnicontaService uniconta,
         IOptions<StatusMappingConfig> config,
+        IIntegrationLogger integrationLogger,
+        SupabaseOptions supabaseOptions,
         ILogger<SyncRequestOrderStatusToUniconta> logger)
     {
         _jd = jd;
         _uniconta = uniconta;
         _config = config.Value;
+        _integrationLogger = integrationLogger;
+        _supabaseOptions = supabaseOptions;
         _logger = logger;
     }
 
@@ -33,8 +41,8 @@ public class SyncRequestOrderStatusToUniconta
         var correlationId = Guid.NewGuid().ToString("N");
         using var scope = _logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
         _logger.LogInformation("SyncRequestOrderStatusToUniconta started");
-        
-        var cts = new CancellationTokenSource();
+
+        using var cts = new CancellationTokenSource();
         var token = cts.Token;
 
         try
@@ -119,27 +127,47 @@ public class SyncRequestOrderStatusToUniconta
                 }
 
                 // Perform Update
-                _logger.LogInformation("Updating Order {OrderNumber}: {Source} (Status:{JdStatus}, Stage:{JdStage}) -> Group '{TargetGroup}' (was '{CurrentGroup}')", 
+                _logger.LogInformation("Updating Order {OrderNumber}: {Source} (Status:{JdStatus}, Stage:{JdStage}) -> Group '{TargetGroup}' (was '{CurrentGroup}')",
                     orderNumber, mappingSource, jdOrder.status, jdOrder.stage, targetGroup, currentGroup);
 
                 var success = await _uniconta.UpdateSalesOrderGroupAsync(orderNumber, targetGroup, token);
                 if (success)
                 {
                     updatedCount++;
+                    await _integrationLogger.LogAsync(new IntegrationLogEntry(
+                        _supabaseOptions.IntegrationName, "info", "Integration", orderNumber.ToString(),
+                        $"Sales order {orderNumber} status updated to '{targetGroup}' from JD.", null, null), token);
                 }
                 else
                 {
                     errorCount++;
+                    await _integrationLogger.LogAsync(new IntegrationLogEntry(
+                        _supabaseOptions.IntegrationName, "error", "Uniconta", orderNumber.ToString(),
+                        $"Failed to update sales order {orderNumber} status to '{targetGroup}' in Uniconta.", null, null), token);
                 }
             }
 
             _logger.LogInformation("Sync Completed. Updated: {Updated}, Errors: {Errors}, Skipped/NoChange: {Skipped}",
                 updatedCount, errorCount, skippedCount);
+
+            if (updatedCount > 0 || errorCount > 0)
+            {
+                await _integrationLogger.LogAsync(new IntegrationLogEntry(
+                    _supabaseOptions.IntegrationName, "info", "Integration", null,
+                    $"SyncRequestOrderStatusToUniconta completed: {updatedCount} updated, {errorCount} errors, {skippedCount} unchanged.",
+                    null,
+                    JsonSerializer.SerializeToElement(new { updated = updatedCount, errors = errorCount, skipped = skippedCount })
+                ), token);
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error during Request Order Status Sync");
+            await _integrationLogger.LogAsync(new IntegrationLogEntry(
+                _supabaseOptions.IntegrationName, "error", "Integration", null,
+                $"SyncRequestOrderStatusToUniconta run failed: {ex.Message}", ex.ToString(), null
+            ), CancellationToken.None);
+            throw;
         }
     }
 }
-

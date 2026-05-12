@@ -3,6 +3,7 @@ using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
 using NeroTrade.JDIntegration.Models.ExternalIntegration;
+using NeroTrade.JDIntegration.Services.Logging;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Models;
@@ -11,12 +12,15 @@ using NeroTrade.JDIntegration.Services.UnicontaHandler.Repositories;
 using NeroTrade.JDIntegration.Services.PdfGeneration;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text.Json;
 
 public sealed class SyncSalesOrdersToJd(
     IJdLogisticsService jd,
     IUnicontaService uniconta,
     SalesOrderMapper mapper,
     IDeliveryNotePdfService pdfService,
+    IIntegrationLogger integrationLogger,
+    SupabaseOptions supabaseOptions,
     ILogger<SyncSalesOrdersToJd> logger)
 {
     private static readonly HttpClient FileUploadHttpClient = new();
@@ -29,47 +33,73 @@ public sealed class SyncSalesOrdersToJd(
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
         logger.LogInformation("SyncSalesOrdersToJd started");
 
-        var inventories = await jd.GetInventoriesAsync(cts.Token);
-        var inventory = inventories.FirstOrDefault();
-        if (inventory == null || inventory.id == null)
+        try
         {
-            logger.LogWarning("No inventories available in JD");
-            return;
-        }
-
-        // Build RequestOrder from Sales Orders (DebtorOrderClient) per user's mapping
-        var batch = new List<JdRequestOrderCreate>(capacity: 200);
-
-        // Existing Uniconta delivery notes are not yet wired up (see UnicontaRepository.ReadDebtorDeliveryNotesAsync).
-        // TODO: Populate this once ReadDebtorDeliveryNotesAsync is implemented.
-        var deliveryNotesByDebtor = new Dictionary<string?, List<DebtorDeliveryNoteInfo>>(StringComparer.OrdinalIgnoreCase);
-
-        await foreach (var so in uniconta.ReadSalesOrdersBatchedAsync(200, cts.Token))
-        {
-            // Generate and upload PDF delivery note for this order
-            var generatedPdfFiles = await GenerateAndUploadDeliveryNotePdfAsync(so, cts.Token);
-            
-            // Also upload any existing delivery notes from Uniconta (optional)
-            var existingDeliveryNotes = await UploadDeliveryNotesAsync(so.DebtorAccount, deliveryNotesByDebtor, cts.Token);
-            
-            // Combine both file lists (generated PDF + existing files)
-            var allFiles = generatedPdfFiles.Concat(existingDeliveryNotes).ToList();
-
-            batch.Add(mapper.Map(so, allFiles));
-            if (batch.Count >= 200)
+            var inventories = await jd.GetInventoriesAsync(cts.Token);
+            var inventory = inventories.FirstOrDefault();
+            if (inventory == null || inventory.id == null)
             {
-                await HandleBatchAsync(inventory.id.Value, batch, cts.Token);
+                logger.LogWarning("No inventories available in JD");
+                return;
+            }
+
+            // Build RequestOrder from Sales Orders (DebtorOrderClient) per user's mapping
+            var batch = new List<JdRequestOrderCreate>(capacity: 200);
+
+            // Existing Uniconta delivery notes are not yet wired up (see UnicontaRepository.ReadDebtorDeliveryNotesAsync).
+            // TODO: Populate this once ReadDebtorDeliveryNotesAsync is implemented.
+            var deliveryNotesByDebtor = new Dictionary<string?, List<DebtorDeliveryNoteInfo>>(StringComparer.OrdinalIgnoreCase);
+
+            int totalProcessed = 0, totalSucceeded = 0, totalFailed = 0;
+
+            await foreach (var so in uniconta.ReadSalesOrdersBatchedAsync(200, cts.Token))
+            {
+                // Generate and upload PDF delivery note for this order
+                var generatedPdfFiles = await GenerateAndUploadDeliveryNotePdfAsync(so, cts.Token);
+
+                // Also upload any existing delivery notes from Uniconta (optional)
+                var existingDeliveryNotes = await UploadDeliveryNotesAsync(so.DebtorAccount, deliveryNotesByDebtor, cts.Token);
+
+                // Combine both file lists (generated PDF + existing files)
+                var allFiles = generatedPdfFiles.Concat(existingDeliveryNotes).ToList();
+
+                batch.Add(mapper.Map(so, allFiles));
+                if (batch.Count >= 200)
+                {
+                    var (p, s, f) = await HandleBatchAsync(inventory.id.Value, batch, cts.Token);
+                    totalProcessed += p; totalSucceeded += s; totalFailed += f;
+                    batch.Clear();
+                }
+            }
+            if (batch.Count > 0)
+            {
+                var (p, s, f) = await HandleBatchAsync(inventory.id.Value, batch, cts.Token);
+                totalProcessed += p; totalSucceeded += s; totalFailed += f;
                 batch.Clear();
             }
+
+            if (totalProcessed > 0)
+            {
+                await integrationLogger.LogAsync(new IntegrationLogEntry(
+                    supabaseOptions.IntegrationName, "info", "Integration", null,
+                    $"SyncSalesOrdersToJd completed: {totalSucceeded} succeeded, {totalFailed} failed.",
+                    null,
+                    JsonSerializer.SerializeToElement(new { processed = totalProcessed, succeeded = totalSucceeded, failed = totalFailed })
+                ), cts.Token);
+            }
         }
-        if (batch.Count > 0)
+        catch (Exception ex)
         {
-            await HandleBatchAsync(inventory.id.Value, batch, cts.Token);
-            batch.Clear();
+            logger.LogError(ex, "SyncSalesOrdersToJd failed");
+            await integrationLogger.LogAsync(new IntegrationLogEntry(
+                supabaseOptions.IntegrationName, "error", "Integration", null,
+                $"SyncSalesOrdersToJd run failed: {ex.Message}", ex.ToString(), null
+            ), CancellationToken.None);
+            throw;
         }
     }
 
-    private async Task HandleBatchAsync(long inventoryId, List<JdRequestOrderCreate> batch, CancellationToken ct)
+    private async Task<(int processed, int succeeded, int failed)> HandleBatchAsync(long inventoryId, List<JdRequestOrderCreate> batch, CancellationToken ct)
     {
         var result = await jd.UpsertRequestOrdersAsync(inventoryId, batch, ct);
 
@@ -88,8 +118,21 @@ public sealed class SyncSalesOrdersToJd(
             {
                 [UnicontaUserFields.IntegrationIssue] = string.Empty,
             }, ct);
-            if (success) markedCreated++;
-            else logger.LogError("Failed to set SO {Order} group to Oprettet", order.SourceOrderNumber.Value);
+            if (success)
+            {
+                markedCreated++;
+                await integrationLogger.LogAsync(new IntegrationLogEntry(
+                    supabaseOptions.IntegrationName, "info", "Integration", order.SourceOrderNumber.Value.ToString(),
+                    $"Sales order {order.SourceOrderNumber} synced to JD.", null, null), ct);
+            }
+            else
+            {
+                logger.LogError("Failed to set SO {Order} group to Oprettet", order.SourceOrderNumber.Value);
+                await integrationLogger.LogAsync(new IntegrationLogEntry(
+                    supabaseOptions.IntegrationName, "warning", "Uniconta", order.SourceOrderNumber.Value.ToString(),
+                    $"Sales order {order.SourceOrderNumber} was sent to JD but the Uniconta status update failed; will retry next run.",
+                    null, null), ct);
+            }
         }
 
         // Failed in JD: status = Fejlet, record why, and consume the transfer trigger. It will only be
@@ -105,6 +148,11 @@ public sealed class SyncSalesOrdersToJd(
             }, ct);
             if (success) markedFailed++;
             else logger.LogError("Failed to set SO {Order} group to Fejlet", failure.Item.SourceOrderNumber.Value);
+
+            await integrationLogger.LogAsync(new IntegrationLogEntry(
+                supabaseOptions.IntegrationName, "error", "JD", failure.Item.SourceOrderNumber.Value.ToString(),
+                $"JD rejected sales order {failure.Item.SourceOrderNumber}: {failure.Message}", null,
+                JsonSerializer.SerializeToElement(new { errorMessage = failure.Message, sourceOrderNumber = failure.Item.SourceOrderNumber })), ct);
         }
 
         logger.LogInformation("JD request orders: success={Success} marked_oprettet={MarkedCreated} failures={Failures} marked_fejlet={MarkedFailed}",
@@ -115,6 +163,8 @@ public sealed class SyncSalesOrdersToJd(
             var sample = string.Join("; ", result.Failures.Take(5).Select(f => $"{f.Item.text}: {f.Message}"));
             logger.LogWarning("JD request orders upsert failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
         }
+
+        return (batch.Count, result.SuccessCount, result.Failures.Count);
     }
 
     /// <summary>
