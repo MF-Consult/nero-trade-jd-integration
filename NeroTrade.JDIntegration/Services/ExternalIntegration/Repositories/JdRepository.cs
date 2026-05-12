@@ -196,6 +196,7 @@ public sealed class JdRepository : IJdRepository
         var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/inventories"), cancellationToken);
         if (!response.IsSuccessStatusCode)
             return Array.Empty<JdInventory>();
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var data = await JsonSerializer.DeserializeAsync<List<JdInventory>>(stream, cancellationToken: cancellationToken) ?? new List<JdInventory>();
         return data;

@@ -98,40 +98,32 @@ public sealed class SalesOrderMapper
         JdRequestOrderShipmondo? shipmondo = null;
         DateTime? finalDeliveryDate = so.DeliveryDate;
 
+        string? carrierCode = null;
+        string? productCode = null;
+
         if (!string.IsNullOrWhiteSpace(so.DeliveryType))
         {
-            var (carrierCode, productCode) = so.DeliveryType.ToUpperInvariant() switch
+            (carrierCode, productCode) = so.DeliveryType.ToUpperInvariant() switch
             {
                 "GLS" => ("gls", "GLSDK_BP"),
                 "PALLE FRAGT" => ("glimoe", "GLIMOE_PARCEL"),
                 _ => (null, null)
             };
-
-            if (carrierCode != null)
-            {
-                var productServices = new List<string> { ShipmondoServiceCodes.PalletExchange };
-                if (so.DeliveryTime.HasValue)
-                {
-                    productServices.Add(ShipmondoServiceCodes.TimedDelivery);
-                    // Combine date and time
-                    finalDeliveryDate = so.DeliveryDate?.Date.Add(so.DeliveryTime.Value.TimeOfDay);
-                }
-
-                shipmondo = new JdRequestOrderShipmondo
-                {
-                    carrierCode = carrierCode,
-                    productCode = productCode,
-                    productServices = productServices,
-                    pickupPointId = null,
-                    carrierInstructions = so.CarrierMessage,
-                    draftShipmentId = null
-                };
-            }
         }
         else if (so.TransportType == "Ekstern Transport")
         {
-            var productServices = new List<string> { ShipmondoServiceCodes.PalletExchange };
-            if (so.DeliveryTime.HasValue)
+            (carrierCode, productCode) = ("glimoe", "GLIMOE_PARCEL");
+        }
+
+        if (carrierCode != null && productCode != null)
+        {
+            var productServices = new List<string>();
+            if (ShipmondoProductCatalog.SupportsService(productCode, ShipmondoServiceCodes.PalletExchange))
+            {
+                productServices.Add(ShipmondoServiceCodes.PalletExchange);
+            }
+
+            if (so.DeliveryTime.HasValue && ShipmondoProductCatalog.SupportsService(productCode, ShipmondoServiceCodes.TimedDelivery))
             {
                 productServices.Add(ShipmondoServiceCodes.TimedDelivery);
                 // Combine date and time
@@ -140,8 +132,8 @@ public sealed class SalesOrderMapper
 
             shipmondo = new JdRequestOrderShipmondo
             {
-                carrierCode = "glimoe",
-                productCode = "GLIMOE_PARCEL",
+                carrierCode = carrierCode,
+                productCode = productCode,
                 productServices = productServices,
                 pickupPointId = null,
                 carrierInstructions = so.CarrierMessage,

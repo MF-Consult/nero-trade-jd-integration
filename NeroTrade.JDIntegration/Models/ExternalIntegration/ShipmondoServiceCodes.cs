@@ -7,6 +7,8 @@ public static class ShipmondoServiceCodes
 {
     public const string TimedDelivery = "TIMED_DELIVERY";
 
-    // Byttepaller — always sent to JD for Shipmondo-routed orders (confirmed by JD Logistik, 2026-05-12).
+    // Byttepaller — only valid for pallet products (e.g. GLIMOE_PARCEL).
+    // JD rejects with "PL_EXCHANGE isn't an allowed service" if sent for parcel products like GLSDK_BP.
+    // See ShipmondoProductCatalog for the per-product allow-list.
     public const string PalletExchange = "PL_EXCHANGE";
 }

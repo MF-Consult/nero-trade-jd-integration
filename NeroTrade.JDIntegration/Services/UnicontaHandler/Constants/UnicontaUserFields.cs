@@ -11,7 +11,7 @@ public static class UnicontaUserFields
     // Transfer flags — set by users in Uniconta to opt an entity in to syncing.
     public const string DebtorTransferFlag = "Xoverfort";
     public const string ItemTransferFlag = "XoverforVare";
-    public const string SalesOrderTransferFlag = "Xoverfor1";
+    public const string SalesOrderTransferFlag = "xTransferToJD";
     public const string PurchaseOrderTransferFlag = "xTransferToJD";
 
     // Process-status field on the purchase order (a value-list user field).

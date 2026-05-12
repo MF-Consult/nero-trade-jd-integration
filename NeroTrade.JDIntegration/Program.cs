@@ -33,20 +33,27 @@ builder.Services.Configure<StatusMappingConfig>(builder.Configuration.GetSection
 // Supabase integration logging
 builder.Services.Configure<SupabaseOptions>(builder.Configuration.GetSection("Supabase"));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<SupabaseOptions>>().Value);
-builder.Services.AddHttpClient<IIntegrationLogger, SupabaseIntegrationLogger>((sp, client) =>
-{
-    var options = sp.GetRequiredService<IOptions<SupabaseOptions>>().Value;
-    if (string.IsNullOrWhiteSpace(options.BaseUrl) || string.IsNullOrWhiteSpace(options.ServiceRoleKey))
-    {
-        throw new InvalidOperationException(
-            "Supabase:BaseUrl and Supabase:ServiceRoleKey must be configured.");
-    }
 
-    client.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/rest/v1/");
-    client.DefaultRequestHeaders.Add("apikey", options.ServiceRoleKey);
-    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", options.ServiceRoleKey);
-    client.Timeout = TimeSpan.FromSeconds(30);
-});
+var supabaseSection = builder.Configuration.GetSection("Supabase");
+var supabaseBaseUrl = supabaseSection["BaseUrl"];
+var supabaseServiceRoleKey = supabaseSection["ServiceRoleKey"];
+
+if (!string.IsNullOrWhiteSpace(supabaseBaseUrl) && !string.IsNullOrWhiteSpace(supabaseServiceRoleKey))
+{
+    builder.Services.AddHttpClient<IIntegrationLogger, SupabaseIntegrationLogger>((sp, client) =>
+    {
+        var options = sp.GetRequiredService<IOptions<SupabaseOptions>>().Value;
+        client.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/rest/v1/");
+        client.DefaultRequestHeaders.Add("apikey", options.ServiceRoleKey);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", options.ServiceRoleKey);
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
+}
+else
+{
+    // Supabase not configured (e.g. local dev) — fall back to no-op logger so the main sync flow keeps running.
+    builder.Services.AddSingleton<IIntegrationLogger, NoOpIntegrationLogger>();
+}
 
 // Typed HttpClient + repositories for JD
 builder.Services.AddHttpClient<IJdRepository, JdRepository>();
