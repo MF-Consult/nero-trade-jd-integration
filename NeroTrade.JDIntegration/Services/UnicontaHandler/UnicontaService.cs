@@ -86,6 +86,11 @@ public sealed class UnicontaService(IUnicontaRepository repo) : IUnicontaService
         return repo.UpdateSalesOrderGroupAsync(orderNumber, group, cancellationToken);
     }
 
+    public Task<bool> SetSalesOrderStatusAsync(int orderNumber, string group, IReadOnlyDictionary<string, object> userFields, CancellationToken cancellationToken)
+    {
+        return repo.SetSalesOrderStatusAsync(orderNumber, group, userFields, cancellationToken);
+    }
+
     public Task<bool> UpdatePurchaseOrderLineQuantityAsync(int purchaseNumber, string sku, double qtyNow, CancellationToken cancellationToken)
     {
         return repo.UpdatePurchaseOrderLineQuantityAsync(purchaseNumber, sku, qtyNow, cancellationToken);
@@ -96,9 +101,9 @@ public sealed class UnicontaService(IUnicontaRepository repo) : IUnicontaService
         return repo.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, fieldName, value, cancellationToken);
     }
 
-    public Task<bool> SetSalesOrderHeaderFieldAsync(int orderNumber, string fieldName, object value, CancellationToken cancellationToken)
+    public Task<bool> SetPurchaseOrderHeaderFieldsAsync(int purchaseNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
     {
-        return repo.SetSalesOrderHeaderFieldAsync(orderNumber, fieldName, value, cancellationToken);
+        return repo.SetPurchaseOrderHeaderFieldsAsync(purchaseNumber, fields, cancellationToken);
     }
 
     public async IAsyncEnumerable<DebtorDeliveryNoteInfo> ReadDebtorDeliveryNotesAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)

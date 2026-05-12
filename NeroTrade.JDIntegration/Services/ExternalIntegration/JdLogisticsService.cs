@@ -6,12 +6,13 @@ using Repositories;
 
 public sealed class JdLogisticsService(
     IJdRepository repository,
+    JdReadCache cache,
     ILogger<JdLogisticsService> logger)
     : IJdLogisticsService
 {
     private readonly ILogger<JdLogisticsService> _logger = logger;
-    private Dictionary<string, JdAddress>? _existingByAtt;
-    private Dictionary<string, JdCatalogItem>? _existingItemsBySku;
+    private IDictionary<string, JdAddress>? _existingByAtt;
+    private IDictionary<string, JdCatalogItem>? _existingItemsBySku;
     private IReadOnlyList<JdContainerType>? _containerTypes;
 
     /// <summary>
@@ -22,14 +23,7 @@ public sealed class JdLogisticsService(
     /// <returns>Upsert result.</returns>
     public async Task<UpsertResult<JdAddress>> UpsertAddressesAsync(IEnumerable<JdAddress> addresses, CancellationToken cancellationToken)
     {
-        /*_existingByAtt ??= (await repository.GetAddressesAsync(cancellationToken))
-            .Where(a => !string.IsNullOrWhiteSpace(a.att))
-            .GroupBy(a => a.att!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);*/
-        _existingByAtt ??= (await repository.GetAddressesAsync(cancellationToken))
-            //.Where(a => !string.IsNullOrWhiteSpace(a.att))
-            .GroupBy(a => a.att?? string.Empty, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        _existingByAtt = await cache.GetAddressesByAttAsync(() => repository.GetAddressesAsync(cancellationToken), cancellationToken);
 
         var result = new UpsertResult<JdAddress>();
         foreach (var address in addresses)
@@ -70,10 +64,7 @@ public sealed class JdLogisticsService(
     /// <returns>Upsert result.</returns>
     public async Task<UpsertResult<JdCatalogItem>> UpsertItemsAsync(IEnumerable<JdCatalogItem> items, CancellationToken cancellationToken)
     {
-        _existingItemsBySku ??= (await repository.GetCatalogItemsAsync(cancellationToken))
-            .Where(i => !string.IsNullOrWhiteSpace(i.sku))
-            .GroupBy(i => i.sku!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        _existingItemsBySku = await cache.GetItemsBySkuAsync(() => repository.GetCatalogItemsAsync(cancellationToken), cancellationToken);
 
         var result = new UpsertResult<JdCatalogItem>();
         foreach (var item in items)
@@ -110,12 +101,16 @@ public sealed class JdLogisticsService(
     // Incoming shipments (purchase orders)
     public async Task<CreateResult<JdIncomingShipmentCreate>> CreateIncomingShipmentsAsync(IEnumerable<JdIncomingShipmentCreate> shipments, CancellationToken cancellationToken)
     {
-        _existingItemsBySku ??= (await repository.GetCatalogItemsAsync(cancellationToken))
-            .Where(i => !string.IsNullOrWhiteSpace(i.sku))
-            .GroupBy(i => i.sku!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        _existingItemsBySku = await cache.GetItemsBySkuAsync(() => repository.GetCatalogItemsAsync(cancellationToken), cancellationToken);
+        _containerTypes = await cache.GetContainerTypesAsync(() => repository.GetContainerTypesAsync(cancellationToken), cancellationToken);
 
-        _containerTypes ??= await repository.GetContainerTypesAsync(cancellationToken);
+        // JD has no external-id lookup for incoming shipments, so we dedupe on the "PO {n}" text we set.
+        // Fetch all statuses (not just approved) so a shipment that exists but is still a draft is also
+        // detected — that prevents both a duplicate create and lets a later run catch up the Uniconta status.
+        var existingPurchaseNumbers = (await repository.GetIncomingShipmentsAsync(cancellationToken, status: null))
+            .Select(s => JdOrderHelper.GetPurchaseOrderNumber(s.text))
+            .Where(n => n != 0)
+            .ToHashSet();
 
         var result = new CreateResult<JdIncomingShipmentCreate>();
         foreach (var shipment in shipments)
@@ -127,16 +122,27 @@ public sealed class JdLogisticsService(
                 continue;
             }
 
+            var purchaseNumber = shipment.SourcePurchaseNumber ?? JdOrderHelper.GetPurchaseOrderNumber(shipment.text);
+            if (purchaseNumber != 0 && existingPurchaseNumbers.Contains(purchaseNumber))
+            {
+                // Already in JD. Treat as success so the caller still flags it in Uniconta and stops re-sending it.
+                _logger.LogInformation("Incoming shipment for PO {Po} already exists in JD, skipping create", purchaseNumber);
+                result.SuccessCount++;
+                result.CreatedItems.Add(shipment);
+                continue;
+            }
+
             await AttemptToResolveCatalogItemsAsync(shipment, cancellationToken);
             await SetContainerTypesAsync(shipment, cancellationToken);
-            
+
             var upsert = await repository.UpsertIncomingShipmentAsync(shipment, cancellationToken);
-            if (upsert.ok) 
+            if (upsert.ok)
             {
-                result.SuccessCount++; 
+                result.SuccessCount++;
                 result.CreatedItems.Add(shipment);
+                if (purchaseNumber != 0) existingPurchaseNumbers.Add(purchaseNumber);
             }
-            else 
+            else
             {
                 result.Failures.Add(new UpsertFailure<JdIncomingShipmentCreate>(shipment, upsert.status, upsert.message));
             }
@@ -166,9 +172,10 @@ public sealed class JdLogisticsService(
 
     public async Task<UpsertResult<JdRequestOrderCreate>> UpsertRequestOrdersAsync(long inventoryId, IEnumerable<JdRequestOrderCreate> orders, CancellationToken cancellationToken)
     {
-        // Build existing map keyed by shop order identifier
+        // Build existing map keyed by shop order identifier (text first, then deliveryNoteText — the
+        // "SO {n}" reference is written to deliveryNoteText on newer orders).
         var existing = (await repository.GetRequestOrdersAsync(inventoryId, cancellationToken))
-            .Select(r => new { Order = r, Key = JdOrderHelper.GetOrderNumberString(r.shopOrderId, r.text) })
+            .Select(r => new { Order = r, Key = JdOrderHelper.GetOrderNumberString(r.shopOrderId, r.text, r.deliveryNoteText) })
             .Where(x => !string.IsNullOrWhiteSpace(x.Key))
             .GroupBy(x => x.Key!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First().Order, StringComparer.OrdinalIgnoreCase);
@@ -176,7 +183,7 @@ public sealed class JdLogisticsService(
         var result = new UpsertResult<JdRequestOrderCreate>();
         foreach (var order in orders)
         {
-            var key = JdOrderHelper.GetOrderNumberString(order.shopOrderId, order.text);
+            var key = JdOrderHelper.GetOrderNumberString(order.shopOrderId, order.text, order.deliveryNoteText);
             if (string.IsNullOrWhiteSpace(key))
             {
                 result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, 0, "Missing shop order identifier"));
@@ -188,15 +195,31 @@ public sealed class JdLogisticsService(
                 // Check if order needs to be updated (deleted and recreated)
                 if (existingOrder.id.HasValue && RequiresRecreation(existingOrder, order))
                 {
+                    // JD swagger on DELETE /api/inventories/{inventoryid}/requestorders/{id}:
+                    // "If the RequestOrder is approved and pending dispatch it wont be possible."
+                    // Skip recreation rather than fire-and-fail-on-delete, and surface a clear reason.
+                    if (JdRequestOrderStage.IsPastDeletionThreshold(existingOrder.stage))
+                    {
+                        var stageLabel = JdRequestOrderStage.Describe(existingOrder.stage);
+                        _logger.LogWarning(
+                            "Request order {ShopOrderId} (JD id {JdOrderId}) has changed in Uniconta but is already at stage {Stage} in JD — skipping recreation",
+                            key, existingOrder.id, stageLabel);
+                        result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(
+                            order,
+                            0,
+                            $"Existing JD order {existingOrder.id} is at stage {stageLabel} and can no longer be deleted/recreated. Update the order directly in JD or cancel it before re-syncing."));
+                        continue;
+                    }
+
                     _logger.LogInformation("Request order {ShopOrderId} has significant changes, deleting and recreating", key);
-                    
+
                     var deleted = await repository.DeleteRequestOrderAsync(inventoryId, existingOrder.id.Value, cancellationToken);
                     if (!deleted.ok)
                     {
                         result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, deleted.status, $"Failed to delete existing order: {deleted.message}"));
                         continue;
                     }
-                    
+
                     var created = await repository.CreateRequestOrderAsync(inventoryId, order, cancellationToken);
                     if (created.ok) result.SuccessCount++; else result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, created.status, created.message));
                 }
@@ -231,6 +254,12 @@ public sealed class JdLogisticsService(
 
         // Compare delivery note text
         if (!string.Equals(existing.deliveryNoteText, incoming.deliveryNoteText, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // Compare Shipmondo carrier code
+        if (!string.Equals(existing.shipmondo?.carrierCode, incoming.shipmondo?.carrierCode, StringComparison.Ordinal))
         {
             return true;
         }

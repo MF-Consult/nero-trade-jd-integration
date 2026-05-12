@@ -13,7 +13,7 @@ public interface IJdRepository
     Task<(bool ok, int status, string message)> UpdateCatalogItemAsync(long id, JdCatalogItem item, CancellationToken cancellationToken);
 
     // Incoming shipments (purchase orders)
-    Task<IReadOnlyList<JdIncomingShipment>> GetIncomingShipmentsAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<JdIncomingShipment>> GetIncomingShipmentsAsync(CancellationToken cancellationToken, int? status = 1);
     Task<(bool ok, int status, string message, JdIncomingShipment? returned)> GetIncomingShipmentByIdAsync(long id, CancellationToken cancellationToken);
     Task<(bool ok, int status, string message, JdIncomingShipment? returned)> UpsertIncomingShipmentAsync(JdIncomingShipmentCreate payload, CancellationToken cancellationToken);
 

@@ -56,7 +56,6 @@ public static class CountryHelper
         ["CHINA"] = ("CN", "China"),
         ["INDIA"] = ("IN", "India"),
         ["BRAZIL"] = ("BR", "Brazil"),
-        ["BRAZIL"] = ("BR", "Brazil"),
         ["SOUTH AFRICA"] = ("ZA", "South Africa"),
         ["RUSSIA"] = ("RU", "Russia"),
         ["РОССИЯ"] = ("RU", "Russia"),
@@ -99,50 +98,42 @@ public sealed class SalesOrderMapper
         JdRequestOrderShipmondo? shipmondo = null;
         DateTime? finalDeliveryDate = so.DeliveryDate;
 
+        string? carrierCode = null;
+        string? productCode = null;
+
         if (!string.IsNullOrWhiteSpace(so.DeliveryType))
         {
-            var (carrierCode, productCode) = so.DeliveryType.ToUpperInvariant() switch
+            (carrierCode, productCode) = so.DeliveryType.ToUpperInvariant() switch
             {
                 "GLS" => ("gls", "GLSDK_BP"),
                 "PALLE FRAGT" => ("glimoe", "GLIMOE_PARCEL"),
                 _ => (null, null)
             };
-
-            if (carrierCode != null)
-            {
-                var productServices = new List<string>();
-                if (so.DeliveryTime.HasValue)
-                {
-                    productServices.Add("TIMED_DELIVERY");
-                    // Combine date and time
-                    finalDeliveryDate = so.DeliveryDate?.Date.Add(so.DeliveryTime.Value.TimeOfDay);
-                }
-
-                shipmondo = new JdRequestOrderShipmondo
-                {
-                    carrierCode = carrierCode,
-                    productCode = productCode,
-                    productServices = productServices,
-                    pickupPointId = null,
-                    carrierInstructions = so.CarrierMessage,
-                    draftShipmentId = null
-                };
-            }
         }
         else if (so.TransportType == "Ekstern Transport")
         {
+            (carrierCode, productCode) = ("glimoe", "GLIMOE_PARCEL");
+        }
+
+        if (carrierCode != null && productCode != null)
+        {
             var productServices = new List<string>();
-            if (so.DeliveryTime.HasValue)
+            if (ShipmondoProductCatalog.SupportsService(productCode, ShipmondoServiceCodes.PalletExchange))
             {
-                productServices.Add("TIMED_DELIVERY");
+                productServices.Add(ShipmondoServiceCodes.PalletExchange);
+            }
+
+            if (so.DeliveryTime.HasValue && ShipmondoProductCatalog.SupportsService(productCode, ShipmondoServiceCodes.TimedDelivery))
+            {
+                productServices.Add(ShipmondoServiceCodes.TimedDelivery);
                 // Combine date and time
                 finalDeliveryDate = so.DeliveryDate?.Date.Add(so.DeliveryTime.Value.TimeOfDay);
             }
 
             shipmondo = new JdRequestOrderShipmondo
             {
-                carrierCode = "glimoe",
-                productCode = "GLIMOE_PARCEL",
+                carrierCode = carrierCode,
+                productCode = productCode,
                 productServices = productServices,
                 pickupPointId = null,
                 carrierInstructions = so.CarrierMessage,
@@ -153,13 +144,20 @@ public sealed class SalesOrderMapper
         // Get country information
         var (countryCode, countryName) = CountryHelper.GetCountryInfo(so.DeliveryCountryCode);
 
+        // Per JD (Mikkel, 2026-05-12): the "SO {n} - {remark}" reference goes in deliveryNoteText, not text.
+        // JdOrderHelper falls back to deliveryNoteText when identifying the order on read-back.
+        var soReference = $"SO {so.OrderNumber} - {so.RemarkText}";
+        var deliveryNoteText = string.IsNullOrWhiteSpace(so.DeliveryNoteText)
+            ? soReference
+            : $"{soReference}\n{so.DeliveryNoteText}";
+
         var create = new JdRequestOrderCreate
         {
             date = finalDeliveryDate,
-            text = $"SO {so.OrderNumber} - {so.RemarkText}",
+            text = null,
             SourceOrderNumber = so.OrderNumber,
             trackingNote = so.TrackingNote,
-            deliveryNoteText = so.DeliveryNoteText,
+            deliveryNoteText = deliveryNoteText,
             disableApprovalEmail = false,
             shipmondo = shipmondo,
             address = new JdAddress

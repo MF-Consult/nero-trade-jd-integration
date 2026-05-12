@@ -108,7 +108,7 @@ Behavior:
     "UnicontaConfig__Username": "...",
     "UnicontaConfig__Password": "...",
     "UnicontaConfig__ApiKey": "...",
-    "UnicontaConfig__CompanyId": "2289"
+    "UnicontaConfig__CompanyId": "129192"
   }
 }
 ```
