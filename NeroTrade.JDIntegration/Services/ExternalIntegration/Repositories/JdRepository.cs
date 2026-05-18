@@ -330,6 +330,14 @@ public sealed class JdRepository : IJdRepository
 
         return (true, (int)response.StatusCode, "File verified successfully");
     }
+
+    public async Task<(int status, string body)> GetRawAsync(string relativePath, CancellationToken cancellationToken)
+    {
+        var path = relativePath.TrimStart('/');
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, path), cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        return ((int)response.StatusCode, body);
+    }
 }
 
 

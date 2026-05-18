@@ -1,5 +1,6 @@
 namespace NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
 
+using System.Globalization;
 using NeroTrade.JDIntegration.Models.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Models;
 
@@ -115,6 +116,16 @@ public sealed class SalesOrderMapper
             (carrierCode, productCode) = ("glimoe", "GLIMOE_PARCEL");
         }
 
+        // JD rule (Mikkel, 2026-05-15): DK postal codes > 4999 must not ship with Glimø; reroute to
+        // Esbjerg Gods Sjælland ("Pallefragt - Fyn/Jylland/Bornholm", zip range 5000-9999 + 3700-3799).
+        if (carrierCode == "glimoe"
+            && productCode == "GLIMOE_PARCEL"
+            && IsDanishZipAboveGlimoeThreshold(so.DeliveryZip, so.DeliveryCountryCode))
+        {
+            carrierCode = "esbjerg_gods_sjaelland";
+            productCode = "EGS_STDPL";
+        }
+
         if (carrierCode != null && productCode != null)
         {
             var productServices = new List<string>();
@@ -198,6 +209,19 @@ public sealed class SalesOrderMapper
         }
 
         return create;
+    }
+
+    private static bool IsDanishZipAboveGlimoeThreshold(string? deliveryZip, string? countryCode)
+    {
+        // Uniconta's DeliveryCountryCode is often the full name ("Denmark"/"Danmark"), not the ISO code.
+        // Route through CountryHelper so "Denmark", "Danmark", "DK", and empty all normalize to "DK".
+        var (normalizedCode, _) = CountryHelper.GetCountryInfo(countryCode);
+        var isDk = string.IsNullOrWhiteSpace(countryCode)
+            || string.Equals(normalizedCode, "DK", StringComparison.OrdinalIgnoreCase);
+        if (!isDk) return false;
+
+        return int.TryParse(deliveryZip?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var zip)
+               && zip > 4999;
     }
 }
 
