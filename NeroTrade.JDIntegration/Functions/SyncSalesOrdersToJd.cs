@@ -1,18 +1,17 @@
-using Microsoft.Azure.Functions.Worker;
-using Microsoft.Azure.Functions.Worker.Http;
-using Microsoft.Extensions.Logging;
-using NeroTrade.JDIntegration.Services.ExternalIntegration;
-using NeroTrade.JDIntegration.Models.ExternalIntegration;
-using NeroTrade.JDIntegration.Services.Logging;
-using NeroTrade.JDIntegration.Services.UnicontaHandler;
-using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
-using NeroTrade.JDIntegration.Services.UnicontaHandler.Models;
-using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
-using NeroTrade.JDIntegration.Services.UnicontaHandler.Repositories;
-using NeroTrade.JDIntegration.Services.PdfGeneration;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Microsoft.Azure.Functions.Worker;
+using Microsoft.Extensions.Logging;
+using NeroTrade.JDIntegration.Models.ExternalIntegration;
+using NeroTrade.JDIntegration.Services.ExternalIntegration;
+using NeroTrade.JDIntegration.Services.Logging;
+using NeroTrade.JDIntegration.Services.PdfGeneration;
+using NeroTrade.JDIntegration.Services.UnicontaHandler;
+using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
+using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
+using NeroTrade.JDIntegration.Services.UnicontaHandler.Models;
+
+namespace NeroTrade.JDIntegration.Functions;
 
 public sealed class SyncSalesOrdersToJd(
     IJdLogisticsService jd,
@@ -25,9 +24,21 @@ public sealed class SyncSalesOrdersToJd(
 {
     private static readonly HttpClient FileUploadHttpClient = new();
 
+    // Prevents overlapping runs within the same worker instance. A previous run that lags past
+    // the 30s trigger interval would otherwise race the next run on Uniconta state — most visibly
+    // by overwriting a manual flueben re-check on a Fejlet order with stale snapshot data.
+    // Skip (not queue) when the lock is held: queuing just amplifies the same race.
+    private static readonly SemaphoreSlim RunLock = new(1, 1);
+
     [Function("SyncSalesOrdersToJd")]
     public async Task RunAsync([TimerTrigger("*/30 * * * * *")] TimerInfo timer)
     {
+        if (!await RunLock.WaitAsync(0))
+        {
+            logger.LogInformation("SyncSalesOrdersToJd skipped — previous run still in progress");
+            return;
+        }
+
         var correlationId = Guid.NewGuid().ToString("N");
         using var cts = new CancellationTokenSource();
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
@@ -96,6 +107,10 @@ public sealed class SyncSalesOrdersToJd(
                 $"SyncSalesOrdersToJd run failed: {ex.Message}", ex.ToString(), null
             ), CancellationToken.None);
             throw;
+        }
+        finally
+        {
+            RunLock.Release();
         }
     }
 

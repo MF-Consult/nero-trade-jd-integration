@@ -1,5 +1,5 @@
+using System.Text.Json;
 using Microsoft.Azure.Functions.Worker;
-using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Models.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
@@ -7,8 +7,8 @@ using NeroTrade.JDIntegration.Services.Logging;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
-using NeroTrade.JDIntegration.Services.UnicontaHandler.Models;
-using System.Text.Json;
+
+namespace NeroTrade.JDIntegration.Functions;
 
 public sealed class SyncPurchaseOrdersToJd(
     IUnicontaService uniconta,

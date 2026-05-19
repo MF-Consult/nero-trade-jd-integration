@@ -15,7 +15,8 @@ public class StatusMappingConfig
         { 1, "Afvist" },     // Denied
         { 2, "Planlagt" },   // Planned
         { 3, "Pakket" },     // PendingDispatch
-        { 4, "Afsendt" }     // Dispatched
+        { 4, "Afsendt" },    // Dispatched
+        { 90, "Udleveret" }  // Closed — JD UI shows this as "Udleveret" once handed out
     };
 }
 
