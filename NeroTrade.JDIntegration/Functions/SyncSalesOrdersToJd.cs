@@ -22,7 +22,7 @@ public sealed class SyncSalesOrdersToJd(
     SupabaseOptions supabaseOptions,
     ILogger<SyncSalesOrdersToJd> logger)
 {
-    private static readonly HttpClient FileUploadHttpClient = new();
+    private static readonly HttpClient FileUploadHttpClient = new() { Timeout = TimeSpan.FromMinutes(2) };
 
     // Prevents overlapping runs within the same worker instance. A previous run that lags past
     // the 30s trigger interval would otherwise race the next run on Uniconta state — most visibly
@@ -31,22 +31,21 @@ public sealed class SyncSalesOrdersToJd(
     private static readonly SemaphoreSlim RunLock = new(1, 1);
 
     [Function("SyncSalesOrdersToJd")]
-    public async Task RunAsync([TimerTrigger("*/30 * * * * *")] TimerInfo timer)
+    public async Task RunAsync([TimerTrigger("*/30 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
-        if (!await RunLock.WaitAsync(0))
+        if (!await RunLock.WaitAsync(0, cancellationToken))
         {
             logger.LogInformation("SyncSalesOrdersToJd skipped — previous run still in progress");
             return;
         }
 
-        var correlationId = Guid.NewGuid().ToString("N");
-        using var cts = new CancellationTokenSource();
-        using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
+        var logScope = new IntegrationLogScope();
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });
         logger.LogInformation("SyncSalesOrdersToJd started");
 
         try
         {
-            var inventories = await jd.GetInventoriesAsync(cts.Token);
+            var inventories = await jd.GetInventoriesAsync(cancellationToken);
             var inventory = inventories.FirstOrDefault();
             if (inventory == null || inventory.id == null)
             {
@@ -59,17 +58,17 @@ public sealed class SyncSalesOrdersToJd(
 
             // Existing Uniconta delivery notes are not yet wired up (see UnicontaRepository.ReadDebtorDeliveryNotesAsync).
             // TODO: Populate this once ReadDebtorDeliveryNotesAsync is implemented.
-            var deliveryNotesByDebtor = new Dictionary<string?, List<DebtorDeliveryNoteInfo>>(StringComparer.OrdinalIgnoreCase);
+            var deliveryNotesByDebtor = new Dictionary<string, List<DebtorDeliveryNoteInfo>>(StringComparer.OrdinalIgnoreCase);
 
             int totalProcessed = 0, totalSucceeded = 0, totalFailed = 0;
 
-            await foreach (var so in uniconta.ReadSalesOrdersBatchedAsync(200, cts.Token))
+            await foreach (var so in uniconta.ReadSalesOrdersBatchedAsync(200, cancellationToken))
             {
                 // Generate and upload PDF delivery note for this order
-                var generatedPdfFiles = await GenerateAndUploadDeliveryNotePdfAsync(so, cts.Token);
+                var generatedPdfFiles = await GenerateAndUploadDeliveryNotePdfAsync(so, logScope, cancellationToken);
 
                 // Also upload any existing delivery notes from Uniconta (optional)
-                var existingDeliveryNotes = await UploadDeliveryNotesAsync(so.DebtorAccount, deliveryNotesByDebtor, cts.Token);
+                var existingDeliveryNotes = await UploadDeliveryNotesAsync(so.DebtorAccount, deliveryNotesByDebtor, cancellationToken);
 
                 // Combine both file lists (generated PDF + existing files)
                 var allFiles = generatedPdfFiles.Concat(existingDeliveryNotes).ToList();
@@ -77,14 +76,14 @@ public sealed class SyncSalesOrdersToJd(
                 batch.Add(mapper.Map(so, allFiles));
                 if (batch.Count >= 200)
                 {
-                    var (p, s, f) = await HandleBatchAsync(inventory.id.Value, batch, cts.Token);
+                    var (p, s, f) = await HandleBatchAsync(inventory.id.Value, batch, logScope, cancellationToken);
                     totalProcessed += p; totalSucceeded += s; totalFailed += f;
                     batch.Clear();
                 }
             }
             if (batch.Count > 0)
             {
-                var (p, s, f) = await HandleBatchAsync(inventory.id.Value, batch, cts.Token);
+                var (p, s, f) = await HandleBatchAsync(inventory.id.Value, batch, logScope, cancellationToken);
                 totalProcessed += p; totalSucceeded += s; totalFailed += f;
                 batch.Clear();
             }
@@ -95,17 +94,25 @@ public sealed class SyncSalesOrdersToJd(
                     supabaseOptions.IntegrationName, "info", "Integration", null,
                     $"SyncSalesOrdersToJd completed: {totalSucceeded} succeeded, {totalFailed} failed.",
                     null,
-                    JsonSerializer.SerializeToElement(new { processed = totalProcessed, succeeded = totalSucceeded, failed = totalFailed })
-                ), cts.Token);
+                    JsonSerializer.SerializeToElement(new { processed = totalProcessed, succeeded = totalSucceeded, failed = totalFailed }))
+                {
+                    CorrelationId = logScope.CorrelationId
+                }, cancellationToken);
             }
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "SyncSalesOrdersToJd failed");
+            var classified = ErrorCodeClassifier.Classify(ex);
             await integrationLogger.LogAsync(new IntegrationLogEntry(
                 supabaseOptions.IntegrationName, "error", "Integration", null,
-                $"SyncSalesOrdersToJd run failed: {ex.Message}", ex.ToString(), null
-            ), CancellationToken.None);
+                $"SyncSalesOrdersToJd run failed: {LogSanitizer.Describe(ex)}", null, null)
+            {
+                CorrelationId = logScope.CorrelationId,
+                ErrorCode = classified.ErrorCode,
+                Retryable = classified.Retryable,
+                SuggestedAction = classified.SuggestedAction
+            }, CancellationToken.None);
             throw;
         }
         finally
@@ -114,7 +121,7 @@ public sealed class SyncSalesOrdersToJd(
         }
     }
 
-    private async Task<(int processed, int succeeded, int failed)> HandleBatchAsync(long inventoryId, List<JdRequestOrderCreate> batch, CancellationToken ct)
+    private async Task<(int processed, int succeeded, int failed)> HandleBatchAsync(long inventoryId, List<JdRequestOrderCreate> batch, IntegrationLogScope logScope, CancellationToken ct)
     {
         var result = await jd.UpsertRequestOrdersAsync(inventoryId, batch, ct);
 
@@ -138,7 +145,10 @@ public sealed class SyncSalesOrdersToJd(
                 markedCreated++;
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
                     supabaseOptions.IntegrationName, "info", "Integration", order.SourceOrderNumber.Value.ToString(),
-                    $"Sales order {order.SourceOrderNumber} synced to JD.", null, null), ct);
+                    $"Sales order {order.SourceOrderNumber} synced to JD.", null, null)
+                {
+                    CorrelationId = logScope.CorrelationId
+                }, ct);
             }
             else
             {
@@ -146,7 +156,13 @@ public sealed class SyncSalesOrdersToJd(
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
                     supabaseOptions.IntegrationName, "warning", "Uniconta", order.SourceOrderNumber.Value.ToString(),
                     $"Sales order {order.SourceOrderNumber} was sent to JD but the Uniconta status update failed; will retry next run.",
-                    null, null), ct);
+                    null, null)
+                {
+                    CorrelationId = logScope.CorrelationId,
+                    ErrorCode = "UNICONTA_CRUD_FAILED",
+                    Retryable = true,
+                    SuggestedAction = "Auto-recovers on next tick; if it persists, retry SO via /admin/retry-sales-order."
+                }, ct);
             }
         }
 
@@ -166,8 +182,14 @@ public sealed class SyncSalesOrdersToJd(
 
             await integrationLogger.LogAsync(new IntegrationLogEntry(
                 supabaseOptions.IntegrationName, "error", "JD", failure.Item.SourceOrderNumber.Value.ToString(),
-                $"JD rejected sales order {failure.Item.SourceOrderNumber}: {failure.Message}", null,
-                JsonSerializer.SerializeToElement(new { errorMessage = failure.Message, sourceOrderNumber = failure.Item.SourceOrderNumber })), ct);
+                $"JD rejected sales order {failure.Item.SourceOrderNumber}: {LogSanitizer.Sanitize(failure.Message)}", null,
+                JsonSerializer.SerializeToElement(new { errorMessage = failure.Message, sourceOrderNumber = failure.Item.SourceOrderNumber }))
+            {
+                CorrelationId = logScope.CorrelationId,
+                ErrorCode = "JD_VALIDATION_REJECTED",
+                Retryable = false,
+                SuggestedAction = "Manual review — Uniconta SO has been marked Fejlet with the JD reject reason."
+            }, ct);
         }
 
         logger.LogInformation("JD request orders: success={Success} marked_oprettet={MarkedCreated} failures={Failures} marked_fejlet={MarkedFailed}",
@@ -184,20 +206,27 @@ public sealed class SyncSalesOrdersToJd(
 
     /// <summary>
     /// Generates a PDF delivery note for the sales order and uploads it to JD as a package label.
+    /// Emits a monitoring row to Supabase on every failure path so the Hermes agent can see when
+    /// orders are pushed to JD without a follow-along PDF.
     /// </summary>
     private async Task<IReadOnlyCollection<JdRequestOrderFileRef>> GenerateAndUploadDeliveryNotePdfAsync(
         LocalSalesOrder salesOrder,
+        IntegrationLogScope logScope,
         CancellationToken cancellationToken)
     {
+        var externalId = salesOrder.OrderNumber.ToString();
         try
         {
-            // Generate PDF from sales order
             logger.LogDebug("Generating PDF delivery note for order {OrderNumber}", salesOrder.OrderNumber);
             var pdfBytes = await pdfService.GenerateDeliveryNotePdfAsync(salesOrder);
-            
+
             if (pdfBytes == null || pdfBytes.Length == 0)
             {
                 logger.LogWarning("PDF generation returned empty bytes for order {OrderNumber}", salesOrder.OrderNumber);
+                await EmitPdfFailureAsync(externalId, "PDF_GENERATION_FAILED",
+                    $"PDF delivery note for order {salesOrder.OrderNumber} was empty.",
+                    "Inspect QuestPDF template — generator returned zero bytes.",
+                    logScope, cancellationToken);
                 return Array.Empty<JdRequestOrderFileRef>();
             }
 
@@ -212,8 +241,12 @@ public sealed class SyncSalesOrdersToJd(
 
             if (!ok || file == null || string.IsNullOrWhiteSpace(uploadUrl))
             {
-                logger.LogWarning("Failed to create JD file for order {Order}. Status={Status} Message={Message}", 
+                logger.LogWarning("Failed to create JD file for order {Order}. Status={Status} Message={Message}",
                     salesOrder.OrderNumber, status, message);
+                await EmitPdfFailureAsync(externalId, "JD_VALIDATION_REJECTED",
+                    $"JD refused to create file metadata for order {salesOrder.OrderNumber}: {LogSanitizer.Sanitize(message)} (status {status}).",
+                    "Order will still ship to JD without a PDF on this tick; manual review.",
+                    logScope, cancellationToken);
                 return Array.Empty<JdRequestOrderFileRef>();
             }
 
@@ -221,8 +254,12 @@ public sealed class SyncSalesOrdersToJd(
             var uploadSucceeded = await UploadFileContentAsync(uploadUrl, pdfBytes, "application/pdf", cancellationToken);
             if (!uploadSucceeded)
             {
-                logger.LogWarning("Failed to upload PDF content for JD file {FileId} order {Order}", 
+                logger.LogWarning("Failed to upload PDF content for JD file {FileId} order {Order}",
                     file.id, salesOrder.OrderNumber);
+                await EmitPdfFailureAsync(externalId, "BLOB_UPLOAD_FAILED",
+                    $"Azure Blob upload failed for JD file {file.id} (order {salesOrder.OrderNumber}).",
+                    "Next tick will regenerate and retry the upload.",
+                    logScope, cancellationToken);
                 return Array.Empty<JdRequestOrderFileRef>();
             }
 
@@ -230,12 +267,16 @@ public sealed class SyncSalesOrdersToJd(
             var verification = await jd.VerifyFileAsync(file.id, cancellationToken);
             if (!verification.ok)
             {
-                logger.LogWarning("Failed to verify JD file {FileId} for order {Order}: {Message}", 
+                logger.LogWarning("Failed to verify JD file {FileId} for order {Order}: {Message}",
                     file.id, salesOrder.OrderNumber, verification.message);
+                await EmitPdfFailureAsync(externalId, "JD_VALIDATION_REJECTED",
+                    $"JD refused to verify uploaded file {file.id} for order {salesOrder.OrderNumber}: {LogSanitizer.Sanitize(verification.message)}.",
+                    "Next tick will regenerate and retry; if persistent, inspect JD file API logs.",
+                    logScope, cancellationToken);
                 return Array.Empty<JdRequestOrderFileRef>();
             }
 
-            logger.LogInformation("Successfully generated and uploaded PDF delivery note as JD file {FileId} for order {Order}", 
+            logger.LogInformation("Successfully generated and uploaded PDF delivery note as JD file {FileId} for order {Order}",
                 file.id, salesOrder.OrderNumber);
 
             // Return file reference with packageLabel = true (important!)
@@ -244,23 +285,38 @@ public sealed class SyncSalesOrdersToJd(
                 new JdRequestOrderFileRef
                 {
                     id = file.id,
-                    packageLabel = true  // Mark as package label
+                    packageLabel = true
                 }
             };
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error generating or uploading PDF for order {Order}", salesOrder.OrderNumber);
+            await EmitPdfFailureAsync(externalId, "PDF_GENERATION_FAILED",
+                $"PDF pipeline threw for order {salesOrder.OrderNumber}: {LogSanitizer.Describe(ex)}",
+                "Next tick will regenerate and retry; investigate App Insights for the full stack trace.",
+                logScope, CancellationToken.None);
             return Array.Empty<JdRequestOrderFileRef>();
         }
     }
 
+    private Task EmitPdfFailureAsync(string externalId, string errorCode, string message, string suggestedAction, IntegrationLogScope logScope, CancellationToken ct) =>
+        integrationLogger.LogAsync(new IntegrationLogEntry(
+            supabaseOptions.IntegrationName, "warning", "Integration", externalId,
+            message, null, null)
+        {
+            CorrelationId = logScope.CorrelationId,
+            ErrorCode = errorCode,
+            Retryable = true,
+            SuggestedAction = suggestedAction
+        }, ct);
+
     private async Task<IReadOnlyCollection<JdRequestOrderFileRef>> UploadDeliveryNotesAsync(
         string? debtorAccount,
-        IReadOnlyDictionary<string?, List<DebtorDeliveryNoteInfo>> deliveryNotesByDebtor,
+        IReadOnlyDictionary<string, List<DebtorDeliveryNoteInfo>> deliveryNotesByDebtor,
         CancellationToken cancellationToken)
     {
-        if (debtorAccount == null) return Array.Empty<JdRequestOrderFileRef>();
+        if (string.IsNullOrEmpty(debtorAccount)) return Array.Empty<JdRequestOrderFileRef>();
         if (!deliveryNotesByDebtor.TryGetValue(debtorAccount, out var notes) || notes.Count == 0)
             return Array.Empty<JdRequestOrderFileRef>();
 

@@ -29,7 +29,13 @@ public sealed class SupabaseIntegrationLogger : IIntegrationLogger
             external_id = entry.ExternalId,
             message = entry.Message,
             stack_trace = entry.StackTrace,
-            payload = entry.Payload
+            payload = entry.Payload,
+            error_code = entry.ErrorCode,
+            correlation_id = entry.CorrelationId,
+            retryable = entry.Retryable,
+            attempt = entry.Attempt,
+            suggested_action = entry.SuggestedAction
+            // status defaults to 'open' server-side; resolution + project filled by the agent/server.
         };
 
         try

@@ -11,7 +11,7 @@ using System.Text.Json;
 
 namespace NeroTrade.JDIntegration.Functions;
 
-public class SyncRequestOrderStatusToUniconta(
+public sealed class SyncRequestOrderStatusToUniconta(
     IJdLogisticsService jd,
     IUnicontaService uniconta,
     IOptions<StatusMappingConfig> config,
@@ -22,14 +22,13 @@ public class SyncRequestOrderStatusToUniconta(
     private readonly StatusMappingConfig _config = config.Value;
 
     [Function("SyncRequestOrderStatusToUniconta")]
-    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer)
+    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
-        var correlationId = Guid.NewGuid().ToString("N");
-        using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
+        var logScope = new IntegrationLogScope();
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });
         logger.LogInformation("SyncRequestOrderStatusToUniconta started");
 
-        using var cts = new CancellationTokenSource();
-        var token = cts.Token;
+        var token = cancellationToken;
 
         try
         {
@@ -141,14 +140,24 @@ public class SyncRequestOrderStatusToUniconta(
                     updatedCount++;
                     await integrationLogger.LogAsync(new IntegrationLogEntry(
                         supabaseOptions.IntegrationName, "info", "Integration", orderNumber.ToString(),
-                        $"Sales order {orderNumber} status updated to '{targetGroup}' from JD.", null, null), token);
+                        $"Sales order {orderNumber} status updated to '{targetGroup}' from JD.", null, null)
+                    {
+                        CorrelationId = logScope.CorrelationId
+                    }, token);
                 }
                 else
                 {
                     errorCount++;
                     await integrationLogger.LogAsync(new IntegrationLogEntry(
                         supabaseOptions.IntegrationName, "error", "Uniconta", orderNumber.ToString(),
-                        $"Failed to update sales order {orderNumber} status to '{targetGroup}' in Uniconta.", null, null), token);
+                        $"Failed to update sales order {orderNumber} status to '{targetGroup}' in Uniconta.", null,
+                        JsonSerializer.SerializeToElement(new { orderNumber, targetGroup, currentGroup, jdStatus = jdOrder.status, jdStage = jdOrder.stage }))
+                    {
+                        CorrelationId = logScope.CorrelationId,
+                        ErrorCode = "UNICONTA_CRUD_FAILED",
+                        Retryable = true,
+                        SuggestedAction = "Auto-recovers on next 5-min tick; if persistent, call /admin/override-order-status."
+                    }, token);
                 }
             }
 
@@ -161,17 +170,25 @@ public class SyncRequestOrderStatusToUniconta(
                     supabaseOptions.IntegrationName, "info", "Integration", null,
                     $"SyncRequestOrderStatusToUniconta completed: {updatedCount} updated, {errorCount} errors, {skippedCount} unchanged.",
                     null,
-                    JsonSerializer.SerializeToElement(new { updated = updatedCount, errors = errorCount, skipped = skippedCount })
-                ), token);
+                    JsonSerializer.SerializeToElement(new { updated = updatedCount, errors = errorCount, skipped = skippedCount }))
+                {
+                    CorrelationId = logScope.CorrelationId
+                }, token);
             }
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error during Request Order Status Sync");
+            var classified = ErrorCodeClassifier.Classify(ex);
             await integrationLogger.LogAsync(new IntegrationLogEntry(
                 supabaseOptions.IntegrationName, "error", "Integration", null,
-                $"SyncRequestOrderStatusToUniconta run failed: {ex.Message}", ex.ToString(), null
-            ), CancellationToken.None);
+                $"SyncRequestOrderStatusToUniconta run failed: {LogSanitizer.Describe(ex)}", null, null)
+            {
+                CorrelationId = logScope.CorrelationId,
+                ErrorCode = classified.ErrorCode,
+                Retryable = classified.Retryable,
+                SuggestedAction = classified.SuggestedAction
+            }, CancellationToken.None);
             throw;
         }
     }

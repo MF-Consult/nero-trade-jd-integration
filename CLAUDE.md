@@ -71,3 +71,25 @@ CI/CD via GitHub Actions (`.github/workflows/master_nero-trade-data-syncer.yml`)
 - `DryRun` mode in `JdSettings` prevents writes to JD (log-only) — useful for testing
 - Nullable reference types are enabled — null-check Uniconta query results carefully
 - All sync functions are `TimerTrigger`-based except `TestGeneratePdf` (HTTP) and `SyncDebtorsToJd` (HTTP)
+
+### Monitoring & remediation contract
+
+**Canonical reference: [docs/operations.md](docs/operations.md)** — architecture, full schema, manual setup steps, endpoint catalogue, Hermes brain contract, multi-project reuse contract, file-by-file map. Read that file before changing anything in `Services/Logging/`, `Functions/Sync*`, or `Functions/Admin/`.
+
+Quick rules for in-session edits:
+
+- Every `LogAsync(new IntegrationLogEntry(...))` must set `CorrelationId = logScope.CorrelationId` so all rows from one invocation are linkable.
+- For `error`/`warning` rows, also set `ErrorCode`, `Retryable`, and `SuggestedAction`. The Hermes agent uses these to decide auto-retry vs. ask-in-Slack.
+- New `/admin/*` endpoints reuse existing `IUnicontaService` / `IJdLogisticsService` methods — never invent new business logic in `RemediationEndpoints.cs`.
+
+**Error-code taxonomy** (`SUBSYSTEM_REASON`, SCREAMING_SNAKE — extend freely):
+
+- `SYNC_RUN_FAILED` — top-level catch in a sync function; almost always retryable
+- `JD_TIMEOUT`, `JD_AUTH_FAILED`, `JD_RATE_LIMITED`, `JD_5XX` — transport-level JD failures
+- `JD_VALIDATION_REJECTED` — JD accepted the request but rejected the payload (not retryable; needs data fix)
+- `JD_LOOKUP_MISS` — JD returned 404 for a record we expected
+- `UNICONTA_DUPLICATE_SO`, `UNICONTA_LOOKUP_MISS`, `UNICONTA_CRUD_FAILED`, `UNICONTA_AUTH_FAILED` — Uniconta-side
+- `SHIPMONDO_NO_CARRIER`, `SHIPMONDO_INVALID_POSTAL` — Shipmondo carrier-mapping problems
+- `PDF_GENERATION_FAILED`, `BLOB_UPLOAD_FAILED` — delivery-note pipeline
+- `MAPPER_NULL_FIELD`, `MAPPER_INVALID_STATE` — code-level edge cases in mappers
+- `UNKNOWN` — fallback; these go to the Hermes "novel error" cascade
