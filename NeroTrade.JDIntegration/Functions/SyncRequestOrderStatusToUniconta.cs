@@ -64,24 +64,36 @@ public class SyncRequestOrderStatusToUniconta(
             int errorCount = 0;
             int skippedCount = 0;
 
-            foreach (var jdOrder in jdOrders)
+            // JD lets multiple request orders point back to the same Uniconta SO (via
+            // deliveryNoteText "SO {n}"). When duplicates exist, iterating naively makes
+            // Group flap each tick depending on JD's response order — see SO 2135 in prod.
+            // Group by resolved SO number and pick one winner deterministically.
+            var jdOrdersBySo = jdOrders
+                .Where(o => o.status.HasValue)
+                .Select(o => (orderNumber: JdOrderHelper.GetOrderNumber(o.shopOrderId, o.text, o.deliveryNoteText), jdOrder: o))
+                .Where(p => p.orderNumber != 0)
+                .GroupBy(p => p.orderNumber);
+
+            foreach (var soGroup in jdOrdersBySo)
             {
-                // Validate JD Order
-                if (jdOrder.status == null) continue;
-
-                int orderNumber = JdOrderHelper.GetOrderNumber(jdOrder.shopOrderId, jdOrder.text, jdOrder.deliveryNoteText);
-
-                if (orderNumber == 0)
-                {
-                    // Could not parse order number
-                    continue;
-                }
+                int orderNumber = soGroup.Key;
 
                 // Check if we have this order in Uniconta
                 if (!unicontaOrders.TryGetValue(orderNumber, out var currentGroup))
                 {
                     // Order exists in JD but not found in Uniconta (or wasn't fetched)
                     continue;
+                }
+
+                var candidates = soGroup.Select(p => p.jdOrder).ToList();
+                var jdOrder = PickWinner(candidates);
+
+                if (candidates.Count > 1)
+                {
+                    var ids = string.Join(",", candidates.Select(c => c.id?.ToString() ?? "?"));
+                    logger.LogInformation(
+                        "SO {OrderNumber}: {Count} JD orders matched (ids: {Ids}) — using id={WinnerId} (status={Status}, stage={Stage})",
+                        orderNumber, candidates.Count, ids, jdOrder.id, jdOrder.status, jdOrder.stage);
                 }
 
                 // Stage takes priority over Status once JD has actually progressed the order past
@@ -162,5 +174,26 @@ public class SyncRequestOrderStatusToUniconta(
             ), CancellationToken.None);
             throw;
         }
+    }
+
+    // Terminal = JD has effectively closed the order with no progression intent. A terminal
+    // order must never overwrite a live sibling's status — see SO 2135 where a Cancelled stub
+    // was racing a Dispatched live order.
+    private static bool IsTerminal(JdRequestOrder o) =>
+        o.status == 2 || o.status == 3 || o.stage == JdRequestOrderStage.Denied;
+
+    private static JdRequestOrder PickWinner(IReadOnlyList<JdRequestOrder> candidates)
+    {
+        if (candidates.Count == 1) return candidates[0];
+
+        // Prefer non-terminal candidates; only fall back to terminal pool when ALL are dead,
+        // so Uniconta still lands on a stable terminal status instead of flapping.
+        var live = candidates.Where(o => !IsTerminal(o)).ToList();
+        var pool = live.Count > 0 ? live : candidates;
+
+        return pool
+            .OrderByDescending(o => o.stage ?? -1)
+            .ThenByDescending(o => o.createdOn ?? DateTime.MinValue)
+            .First();
     }
 }
