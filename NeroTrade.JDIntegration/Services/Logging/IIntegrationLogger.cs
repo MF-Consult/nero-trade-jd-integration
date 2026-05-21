@@ -5,6 +5,25 @@ namespace NeroTrade.JDIntegration.Services.Logging;
 public interface IIntegrationLogger
 {
     Task LogAsync(IntegrationLogEntry entry, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Opens a run scope: emits a "started" info row, starts a stopwatch, and returns a handle that
+    /// emits the matching "completed" row on dispose (level=error if <see cref="IntegrationRun.MarkFailed"/>
+    /// was called or an exception bubbled). Wraps every timer-driven sync function so kørselshistorikken
+    /// always has a paired start/finish + duration_ms.
+    /// </summary>
+    IntegrationRun BeginRun(string runName, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Flips any still-open (status in 'open','ack') failure rows for the SAME external_id, project and
+    /// integration_name to status='auto_fixed' and records the success log id + correlation id in resolution.
+    /// Never touches wontfix/resolved rows.
+    /// </summary>
+    Task MarkResolvedAsync(
+        string integrationName,
+        string externalId,
+        Guid successCorrelationId,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -36,4 +55,10 @@ public sealed record IntegrationLogEntry(
 
     /// <summary>Free-text hint from the catch block — e.g. "retry after 60s", "manual review: invalid VAT".</summary>
     public string? SuggestedAction { get; init; }
+
+    /// <summary>Set only on the completion row written by <see cref="IntegrationRun"/>. NULL on per-event rows.</summary>
+    public int? DurationMs { get; init; }
+
+    /// <summary>Surfaces run_name into payload.run_name on started/completion rows for the integration_runs view.</summary>
+    public string? RunName { get; init; }
 }

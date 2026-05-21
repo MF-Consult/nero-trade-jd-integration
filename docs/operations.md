@@ -132,10 +132,45 @@ Existing columns retained; **bold** columns added in Phase 1.
 | **attempt**       | integer      | reserved — Phase 2 doesn't yet increment this                                        |
 | **suggested_action** | text      | free-text hint from the catch block                                                  |
 | **status**        | text         | `open` / `ack` / `auto_fixed` / `resolved` / `wontfix` — CHECK-constrained, default `open` |
-| **resolution**    | jsonb        | what the agent did and when                                                          |
+| **resolution**    | jsonb        | what the agent (or `IntegrationRun` auto-resolve) did and when                       |
 | **project**       | text         | default `nero-trade-jd-integration` — multi-project routing key                      |
+| **duration_ms**   | integer      | set only on the run-completion row written by `IntegrationRun`; NULL on per-event rows |
 
-Indexes: `(status, level)`, `correlation_id`, `project`, partial on `error_code`.
+Indexes: `(status, level)`, `correlation_id`, `project`, partial on `error_code`, partial `(project, integration_name, external_id, status) where status in ('open','ack')` (used by auto-resolve PATCH).
+
+### 5.1 Run tracking (`IntegrationRun`)
+
+Every timer-driven sync function is wrapped:
+
+```csharp
+await using var run = integrationLogger.BeginRun("SyncSalesOrdersToJd", cancellationToken);
+var logScope = run.Scope;
+// ... existing body unchanged; existing IntegrationLogEntry call sites keep CorrelationId = logScope.CorrelationId ...
+catch (Exception ex) { run.MarkFailed(ex); /* existing emit + throw */ }
+```
+
+The wrapper writes:
+
+1. A `started` info row at entry (payload: `{ run_name, started_at }`).
+2. A paired `completed` row in `DisposeAsync` (in a `try/finally`, so an exception still produces a completion row at `level=error` with `duration_ms` set). Payload: `{ run_name, started_at, finished_at, duration_ms, counts: <whatever caller attached via AttachCompletionPayload> }`.
+
+The existing per-function completion `IntegrationLogEntry` rows are kept unchanged. The two rows aggregate fine in `integration_runs`.
+
+### 5.2 Views
+
+- **`public.integration_runs`** — one row per `correlation_id`: `run_name`, `started_at`, `finished_at`, `duration_ms`, `processed`/`succeeded`/`failed` (from `payload.counts`), `run_status` (ok/warning/error from `bool_or` over levels), `log_count`. Rows without `correlation_id` (older data) are filtered out.
+- **`public.integration_order_timeline`** — every row that carries an `external_id`, with `created_at`, `level`, `error_code`, `message`, `status`, `correlation_id`, `log_id`. Order by `external_id, created_at` when querying.
+
+### 5.3 Auto-resolve
+
+`IIntegrationLogger.MarkResolvedAsync(integrationName, externalId, successCorrelationId, ct)` is called immediately after every per-order success row (`SyncSalesOrdersToJd`, `SyncPurchaseOrdersToJd`, `SyncRequestOrderStatusToUniconta`, `SyncReceivedQuantityToUniconta`). It issues:
+
+```http
+PATCH /rest/v1/integration_logs?project=eq.<P>&integration_name=eq.<I>&external_id=eq.<E>&status=in.(open,ack)
+{ "status": "auto_fixed", "resolution": { "resolved_by": "integration-run-auto-resolve", "resolved_at": "...", "success_correlation_id": "..." } }
+```
+
+Scope is `(project, integration_name, external_id, status in open|ack)` — never touches `wontfix` / `resolved`, and reused `external_id` across integrations cannot match. Failures from the PATCH never break the main flow (logged to App Insights).
 
 > **Heads-up:** RLS is currently disabled on `integration_logs` (pre-existing). Acceptable because all reads/writes use the service-role key. Before exposing the substrate to projects that use weaker keys, enable RLS and add a permissive service-role policy.
 

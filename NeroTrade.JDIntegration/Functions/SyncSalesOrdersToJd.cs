@@ -40,7 +40,8 @@ public sealed class SyncSalesOrdersToJd(
             return;
         }
 
-        var logScope = new IntegrationLogScope();
+        await using var run = integrationLogger.BeginRun("SyncSalesOrdersToJd", cancellationToken);
+        var logScope = run.Scope;
         var timings = new RunTimings();
         var runStopwatch = Stopwatch.StartNew();
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });
@@ -150,10 +151,19 @@ public sealed class SyncSalesOrdersToJd(
                 {
                     CorrelationId = logScope.CorrelationId
                 }, cancellationToken);
+
+                run.AttachCompletionPayload(new
+                {
+                    processed = totalProcessed,
+                    succeeded = totalSucceeded,
+                    failed = totalFailed,
+                    orders_read = timings.OrdersRead
+                });
             }
         }
         catch (Exception ex)
         {
+            run.MarkFailed(ex);
             logger.LogError(ex, "SyncSalesOrdersToJd failed");
             var classified = ErrorCodeClassifier.Classify(ex);
             await integrationLogger.LogAsync(new IntegrationLogEntry(
@@ -208,6 +218,11 @@ public sealed class SyncSalesOrdersToJd(
                 {
                     CorrelationId = logScope.CorrelationId
                 }, ct);
+                await integrationLogger.MarkResolvedAsync(
+                    supabaseOptions.IntegrationName,
+                    order.SourceOrderNumber.Value.ToString(),
+                    logScope.CorrelationId,
+                    ct);
             }
             else
             {

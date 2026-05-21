@@ -20,7 +20,8 @@ public sealed class SyncItemsToJd(
     [Function("SyncItemsToJd")]
     public async Task RunAsync([TimerTrigger("0 */2 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
-        var logScope = new IntegrationLogScope();
+        await using var run = integrationLogger.BeginRun("SyncItemsToJd", cancellationToken);
+        var logScope = run.Scope;
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });
         logger.LogInformation("SyncItemsToJd started");
 
@@ -60,9 +61,12 @@ public sealed class SyncItemsToJd(
                     CorrelationId = logScope.CorrelationId
                 }, cancellationToken);
             }
+
+            run.AttachCompletionPayload(new { prepared = totalPrepared, succeeded = totalSucceeded, failed = totalFailed });
         }
         catch (Exception ex)
         {
+            run.MarkFailed(ex);
             logger.LogError(ex, "SyncItemsToJd failed");
             var classified = ErrorCodeClassifier.Classify(ex);
             await integrationLogger.LogAsync(new IntegrationLogEntry(

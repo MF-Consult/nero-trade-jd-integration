@@ -21,7 +21,8 @@ public sealed class SyncPurchaseOrdersToJd(
     [Function("SyncPurchaseOrdersToJd")]
     public async Task RunAsync([TimerTrigger("*/40 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
-        var logScope = new IntegrationLogScope();
+        await using var run = integrationLogger.BeginRun("SyncPurchaseOrdersToJd", cancellationToken);
+        var logScope = run.Scope;
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });
         logger.LogInformation("SyncPurchaseOrdersToJd started");
 
@@ -61,9 +62,12 @@ public sealed class SyncPurchaseOrdersToJd(
                     CorrelationId = logScope.CorrelationId
                 }, cancellationToken);
             }
+
+            run.AttachCompletionPayload(new { processed = totalProcessed, succeeded = totalSucceeded, failed = totalFailed });
         }
         catch (Exception ex)
         {
+            run.MarkFailed(ex);
             logger.LogError(ex, "SyncPurchaseOrdersToJd failed");
             var classified = ErrorCodeClassifier.Classify(ex);
             await integrationLogger.LogAsync(new IntegrationLogEntry(
@@ -107,6 +111,11 @@ public sealed class SyncPurchaseOrdersToJd(
                 {
                     CorrelationId = logScope.CorrelationId
                 }, ct);
+                await integrationLogger.MarkResolvedAsync(
+                    supabaseOptions.IntegrationName,
+                    item.SourcePurchaseNumber.Value.ToString(),
+                    logScope.CorrelationId,
+                    ct);
             }
             else
             {

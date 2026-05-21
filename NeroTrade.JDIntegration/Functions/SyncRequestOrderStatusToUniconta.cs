@@ -28,7 +28,8 @@ public sealed class SyncRequestOrderStatusToUniconta(
     // becomes an issue, raise back to 2–3 min, not 5.
     public async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
-        var logScope = new IntegrationLogScope();
+        await using var run = integrationLogger.BeginRun("SyncRequestOrderStatusToUniconta", cancellationToken);
+        var logScope = run.Scope;
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });
         logger.LogInformation("SyncRequestOrderStatusToUniconta started");
 
@@ -148,6 +149,11 @@ public sealed class SyncRequestOrderStatusToUniconta(
                     {
                         CorrelationId = logScope.CorrelationId
                     }, token);
+                    await integrationLogger.MarkResolvedAsync(
+                        supabaseOptions.IntegrationName,
+                        orderNumber.ToString(),
+                        logScope.CorrelationId,
+                        token);
                 }
                 else
                 {
@@ -179,9 +185,12 @@ public sealed class SyncRequestOrderStatusToUniconta(
                     CorrelationId = logScope.CorrelationId
                 }, token);
             }
+
+            run.AttachCompletionPayload(new { processed = updatedCount + errorCount + skippedCount, succeeded = updatedCount, failed = errorCount, skipped = skippedCount });
         }
         catch (Exception ex)
         {
+            run.MarkFailed(ex);
             logger.LogError(ex, "Error during Request Order Status Sync");
             var classified = ErrorCodeClassifier.Classify(ex);
             await integrationLogger.LogAsync(new IntegrationLogEntry(
