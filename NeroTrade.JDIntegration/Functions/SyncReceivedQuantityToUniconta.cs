@@ -17,7 +17,7 @@ public sealed class SyncReceivedQuantityToUniconta(
     ILogger<SyncReceivedQuantityToUniconta> logger)
 {
     [Function("SyncReceivedQuantityToUniconta")]
-    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    public async Task RunAsync([TimerTrigger("0 */15 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
         await using var run = integrationLogger.BeginRun("SyncReceivedQuantityToUniconta", cancellationToken);
         var logScope = run.Scope;
@@ -33,7 +33,7 @@ public sealed class SyncReceivedQuantityToUniconta(
             var allShipments = await jd.GetIncomingShipmentsAsync(token);
 
             // Filter for completed shipments (Status = 1) and modified within last 24h.
-            // The function runs every 5 minutes; a 24h window gives ample overlap so nothing is missed.
+            // The function runs every 15 minutes; a 24h window gives ample overlap so nothing is missed.
             var cutoffTime = DateTime.UtcNow.AddDays(-1);
             var relevantShipments = allShipments
                 .Where(s => s.status == 1 && s.modifiedOn >= cutoffTime)
@@ -78,7 +78,7 @@ public sealed class SyncReceivedQuantityToUniconta(
                         CorrelationId = logScope.CorrelationId,
                         ErrorCode = "JD_LOOKUP_MISS",
                         Retryable = true,
-                        SuggestedAction = "Auto-recovers on next 5-min tick; if persistent, the shipment may have been deleted in JD."
+                        SuggestedAction = "Auto-recovers on next tick (15 min); if persistent, the shipment may have been deleted in JD."
                     }, token);
                     continue;
                 }
@@ -113,7 +113,7 @@ public sealed class SyncReceivedQuantityToUniconta(
                             CorrelationId = logScope.CorrelationId,
                             ErrorCode = "UNICONTA_CRUD_FAILED",
                             Retryable = true,
-                            SuggestedAction = "Auto-recovers on next 5-min tick; if persistent, call /admin/requeue-shipment for the source shipment."
+                            SuggestedAction = "Auto-recovers on next tick (15 min); if persistent, call /admin/requeue-shipment for the source shipment."
                         }, token);
                     }
                     else

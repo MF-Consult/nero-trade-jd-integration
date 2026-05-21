@@ -19,7 +19,7 @@ public sealed class SyncPurchaseOrdersToJd(
     ILogger<SyncPurchaseOrdersToJd> logger)
 {
     [Function("SyncPurchaseOrdersToJd")]
-    public async Task RunAsync([TimerTrigger("*/40 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    public async Task RunAsync([TimerTrigger("*/45 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
         await using var run = integrationLogger.BeginRun("SyncPurchaseOrdersToJd", cancellationToken);
         var logScope = run.Scope;

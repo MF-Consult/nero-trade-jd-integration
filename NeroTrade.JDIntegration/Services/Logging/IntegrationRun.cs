@@ -36,16 +36,9 @@ public sealed class IntegrationRun : IAsyncDisposable
 
         Scope = new IntegrationLogScope { RunName = runName };
 
-        // Fire-and-forget the started row — failure to log start must never block the actual work.
-        _ = _logger.LogAsync(new IntegrationLogEntry(
-            _integrationName, "info", "Integration", null,
-            $"{_runName} started",
-            null,
-            JsonSerializer.SerializeToElement(new { run_name = _runName, started_at = _startedAt }))
-        {
-            CorrelationId = Scope.CorrelationId,
-            RunName = _runName
-        }, _cancellationToken);
+        // No started row is emitted — the completion row in DisposeAsync already carries
+        // started_at + duration_ms in payload, so an explicit start event is duplicate noise.
+        // Heartbeat ("did this tick run?") is satisfied by the completion row alone.
     }
 
     public IntegrationLogScope Scope { get; }

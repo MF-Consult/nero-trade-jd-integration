@@ -22,11 +22,10 @@ public sealed class SyncRequestOrderStatusToUniconta(
     private readonly StatusMappingConfig _config = config.Value;
 
     [Function("SyncRequestOrderStatusToUniconta")]
-    // Runs every minute. Previously every 5 min, but that capped JD→Uniconta status feedback
-    // delay at 5 min — most visible "delay" complaint. The function is read-heavy (one full JD
-    // GetRequestOrders + one full Uniconta DebtorOrder scan); if JD rate-limits or Uniconta load
-    // becomes an issue, raise back to 2–3 min, not 5.
-    public async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    // Runs every 5 minutes. The function is read-heavy (one full JD GetRequestOrders + one full
+    // Uniconta DebtorOrder scan); 1-minute cadence was burning quota and Supabase rows for
+    // marginal feedback-latency gain. JD→Uniconta status updates can lag up to 5 min as a result.
+    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
         await using var run = integrationLogger.BeginRun("SyncRequestOrderStatusToUniconta", cancellationToken);
         var logScope = run.Scope;
@@ -166,7 +165,7 @@ public sealed class SyncRequestOrderStatusToUniconta(
                         CorrelationId = logScope.CorrelationId,
                         ErrorCode = "UNICONTA_CRUD_FAILED",
                         Retryable = true,
-                        SuggestedAction = "Auto-recovers on next 5-min tick; if persistent, call /admin/override-order-status."
+                        SuggestedAction = "Auto-recovers on next tick (5 min); if persistent, call /admin/override-order-status."
                     }, token);
                 }
             }

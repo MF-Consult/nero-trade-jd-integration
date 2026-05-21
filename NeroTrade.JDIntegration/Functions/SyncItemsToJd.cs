@@ -18,7 +18,7 @@ public sealed class SyncItemsToJd(
     ILogger<SyncItemsToJd> logger)
 {
     [Function("SyncItemsToJd")]
-    public async Task RunAsync([TimerTrigger("0 */2 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
         await using var run = integrationLogger.BeginRun("SyncItemsToJd", cancellationToken);
         var logScope = run.Scope;
