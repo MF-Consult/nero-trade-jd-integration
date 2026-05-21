@@ -165,7 +165,7 @@ public sealed class JdLogisticsService(
     }
 
     public Task<IReadOnlyList<JdInventory>> GetInventoriesAsync(CancellationToken cancellationToken)
-        => repository.GetInventoriesAsync(cancellationToken);
+        => cache.GetInventoriesAsync(() => repository.GetInventoriesAsync(cancellationToken), cancellationToken);
 
     public Task<IReadOnlyList<JdRequestOrder>> GetRequestOrdersAsync(long inventoryId, CancellationToken cancellationToken)
         => repository.GetRequestOrdersAsync(inventoryId, cancellationToken);

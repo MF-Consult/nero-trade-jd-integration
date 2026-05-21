@@ -22,7 +22,11 @@ public sealed class SyncRequestOrderStatusToUniconta(
     private readonly StatusMappingConfig _config = config.Value;
 
     [Function("SyncRequestOrderStatusToUniconta")]
-    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    // Runs every minute. Previously every 5 min, but that capped JD→Uniconta status feedback
+    // delay at 5 min — most visible "delay" complaint. The function is read-heavy (one full JD
+    // GetRequestOrders + one full Uniconta DebtorOrder scan); if JD rate-limits or Uniconta load
+    // becomes an issue, raise back to 2–3 min, not 5.
+    public async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
         var logScope = new IntegrationLogScope();
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });

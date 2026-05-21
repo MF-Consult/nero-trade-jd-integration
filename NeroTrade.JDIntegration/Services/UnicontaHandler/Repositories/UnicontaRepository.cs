@@ -129,6 +129,17 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
             .GroupBy(i => i!.Item!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => (int)g.First()._ItemType, StringComparer.OrdinalIgnoreCase);
 
+        // Bulk Master/Detail: one round-trip for ALL pending orders' lines instead of one per order.
+        // Previously this loop did `Query<DebtorOrderLineClient>(new List{o}, null)` per order which
+        // dominated the per-tick latency once more than a handful of orders were pending.
+        var allMasters = filteredOrders.Cast<UnicontaBaseEntity>().ToList();
+        var allLines = await queryApi.Query<DebtorOrderLineClient>(allMasters, null);
+        // DebtorOrderLineClient._OrderRowId is the FK back to DebtorOrderClient.RowId.
+        var linesByOrderRowId = (allLines ?? Enumerable.Empty<DebtorOrderLineClient>())
+            .Where(l => l != null)
+            .GroupBy(l => l.OrderRowId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
         foreach (var o in filteredOrders)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -167,25 +178,26 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 OurReference = o.OurRef,
             };
 
-            var masters = new List<UnicontaBaseEntity> { o };
-            var lines = await queryApi.Query<DebtorOrderLineClient>(masters, null);
-            foreach (var l in lines ?? Enumerable.Empty<DebtorOrderLineClient>())
+            if (linesByOrderRowId.TryGetValue(o.RowId, out var lines))
             {
-                int itemType = 0;
-                if (!string.IsNullOrEmpty(l._Item) && itemTypeBySku.TryGetValue(l._Item, out var cachedType))
+                foreach (var l in lines)
                 {
-                    itemType = cachedType;
-                }
+                    int itemType = 0;
+                    if (!string.IsNullOrEmpty(l._Item) && itemTypeBySku.TryGetValue(l._Item, out var cachedType))
+                    {
+                        itemType = cachedType;
+                    }
 
-                so.Lines.Add(new LocalSalesOrderLine
-                {
-                    Sku = l._Item,
-                    ItemName = l.Text,
-                    Quantity = l._Qty,
-                    Unit = l.Unit,
-                    Price = (decimal?)l.Price,
-                    ItemType = itemType
-                });
+                    so.Lines.Add(new LocalSalesOrderLine
+                    {
+                        Sku = l._Item,
+                        ItemName = l.Text,
+                        Quantity = l._Qty,
+                        Unit = l.Unit,
+                        Price = (decimal?)l.Price,
+                        ItemType = itemType
+                    });
+                }
             }
 
             yield return so;

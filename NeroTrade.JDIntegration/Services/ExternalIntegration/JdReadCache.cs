@@ -17,6 +17,7 @@ public sealed class JdReadCache
     private readonly Entry<ConcurrentDictionary<string, JdAddress>> _addressesByAtt = new();
     private readonly Entry<ConcurrentDictionary<string, JdCatalogItem>> _itemsBySku = new();
     private readonly Entry<IReadOnlyList<JdContainerType>> _containerTypes = new();
+    private readonly Entry<IReadOnlyList<JdInventory>> _inventories = new();
 
     public Task<ConcurrentDictionary<string, JdAddress>> GetAddressesByAttAsync(
         Func<Task<IReadOnlyList<JdAddress>>> loader, CancellationToken cancellationToken)
@@ -38,6 +39,12 @@ public sealed class JdReadCache
     public Task<IReadOnlyList<JdContainerType>> GetContainerTypesAsync(
         Func<Task<IReadOnlyList<JdContainerType>>> loader, CancellationToken cancellationToken)
         => _containerTypes.GetAsync(loader, Ttl, cancellationToken);
+
+    // Inventories almost never change. Cached so the 30s sales-order tick and the 1-min status
+    // tick don't each fire a separate GET /inventories round-trip per run.
+    public Task<IReadOnlyList<JdInventory>> GetInventoriesAsync(
+        Func<Task<IReadOnlyList<JdInventory>>> loader, CancellationToken cancellationToken)
+        => _inventories.GetAsync(loader, Ttl, cancellationToken);
 
     private sealed class Entry<T> where T : class
     {
