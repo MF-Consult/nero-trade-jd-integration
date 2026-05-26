@@ -40,7 +40,7 @@ public sealed class JdRepository : IJdRepository
             {
                 var body = await response.Content.ReadAsStringAsync(cancellationToken);
                 _logger.LogWarning("JD GET addresses failed: {Status} {Body}", (int)response.StatusCode, body);
-                break;
+                throw new JdLookupFailedException($"addresses?page={page}", (int)response.StatusCode, body);
             }
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             var pagePayload = await JsonSerializer.DeserializeAsync<JdPagedResponse<JdAddress>>(stream, cancellationToken: cancellationToken)
@@ -83,11 +83,11 @@ public sealed class JdRepository : IJdRepository
     {
         var results = new List<JdCatalogItem>();
         var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/catalog"), cancellationToken);
-            if (!response.IsSuccessStatusCode)
-            {
-                var body = await response.Content.ReadAsStringAsync(cancellationToken);
-                _logger.LogWarning("JD GET catalog items failed: {Status} {Body}", (int)response.StatusCode, body);
-            return Enumerable.Empty<JdCatalogItem>().ToList();
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning("JD GET catalog items failed: {Status} {Body}", (int)response.StatusCode, body);
+            throw new JdLookupFailedException("catalog", (int)response.StatusCode, body);
         }
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var pagePayload = await JsonSerializer.DeserializeAsync<IEnumerable<JdCatalogItem>>(stream, cancellationToken: cancellationToken)
@@ -183,7 +183,11 @@ public sealed class JdRepository : IJdRepository
     {
         var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/containertypes"), cancellationToken);
         if (!response.IsSuccessStatusCode)
-            return Array.Empty<JdContainerType>();
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning("JD GET containertypes failed: {Status} {Body}", (int)response.StatusCode, body);
+            throw new JdLookupFailedException("containertypes", (int)response.StatusCode, body);
+        }
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var data = await JsonSerializer.DeserializeAsync<List<JdContainerType>>(stream, cancellationToken: cancellationToken) ?? new List<JdContainerType>();
         return data;
@@ -193,7 +197,11 @@ public sealed class JdRepository : IJdRepository
     {
         var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/inventories"), cancellationToken);
         if (!response.IsSuccessStatusCode)
-            return Array.Empty<JdInventory>();
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning("JD GET inventories failed: {Status} {Body}", (int)response.StatusCode, body);
+            throw new JdLookupFailedException("inventories", (int)response.StatusCode, body);
+        }
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var data = await JsonSerializer.DeserializeAsync<List<JdInventory>>(stream, cancellationToken: cancellationToken) ?? new List<JdInventory>();
         return data;
