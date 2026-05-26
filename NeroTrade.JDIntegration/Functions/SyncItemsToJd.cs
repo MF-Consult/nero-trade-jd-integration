@@ -54,7 +54,7 @@ public sealed class SyncItemsToJd(
             {
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
                     supabaseOptions.IntegrationName, "info", "Integration", null,
-                    $"SyncItemsToJd completed: {totalSucceeded} succeeded, {totalFailed} failed.",
+                    $"SyncItemsToJd completed: {totalSucceeded} succeeded, {totalFailed} failed (read {totalPrepared}).",
                     null,
                     JsonSerializer.SerializeToElement(new { prepared = totalPrepared, succeeded = totalSucceeded, failed = totalFailed }))
                 {
@@ -91,6 +91,26 @@ public sealed class SyncItemsToJd(
             logger.LogWarning("JD item upsert failures: {Count}. Sample: {Sample}", result.Failures.Count, sample);
         }
 
+        // Only log per-item successes for NEW items (created), not updates. Updates fire every
+        // 5-min tick because xOverforVare stays set, and a per-update row would be pure noise.
+        // The "new item landed in JD" signal — which "varen kom ikke frem"-investigations need —
+        // is captured by the create rows alone.
+        foreach (var created in result.CreatedItems)
+        {
+            if (string.IsNullOrWhiteSpace(created.sku)) continue;
+            await integrationLogger.LogAsync(new IntegrationLogEntry(
+                supabaseOptions.IntegrationName, "info", "Integration", created.sku,
+                $"Catalog item {created.sku} created in JD.", null, null)
+            {
+                CorrelationId = logScope.CorrelationId
+            }, ct);
+            await integrationLogger.MarkResolvedAsync(
+                supabaseOptions.IntegrationName,
+                created.sku,
+                logScope.CorrelationId,
+                ct);
+        }
+
         foreach (var failure in result.Failures)
         {
             await integrationLogger.LogAsync(new IntegrationLogEntry(
@@ -105,7 +125,8 @@ public sealed class SyncItemsToJd(
             }, ct);
         }
 
-        logger.LogInformation("JD item upsert batch success={Success} failures={Failures}", result.SuccessCount, result.Failures.Count);
+        logger.LogInformation("JD item upsert batch success={Success} (created={Created}) failures={Failures}",
+            result.SuccessCount, result.CreatedItems.Count, result.Failures.Count);
         return (batch.Count, result.SuccessCount, result.Failures.Count);
     }
 }
