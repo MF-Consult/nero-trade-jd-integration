@@ -54,6 +54,18 @@ public sealed class SyncSalesOrdersToJd(
             if (inventory == null || inventory.id == null)
             {
                 logger.LogWarning("No inventories available in JD");
+                // Surface to integration_logs so a JD-returns-empty state is visible without grepping
+                // App Insights. With the JdReadCache fix, this should only fire on a cold start (no
+                // stale value cached) or if JD legitimately returns zero inventories.
+                await integrationLogger.LogAsync(new IntegrationLogEntry(
+                    supabaseOptions.IntegrationName, "warning", "JD", null,
+                    "No inventories available in JD — sales-order sync skipped this tick.", null, null)
+                {
+                    CorrelationId = logScope.CorrelationId,
+                    ErrorCode = "JD_LOOKUP_MISS",
+                    Retryable = true,
+                    SuggestedAction = "Verify JD inventories endpoint is returning data; if no recent JD_LOOKUP_FAILED rows, JD legitimately has zero inventories configured."
+                }, cancellationToken);
                 return;
             }
 

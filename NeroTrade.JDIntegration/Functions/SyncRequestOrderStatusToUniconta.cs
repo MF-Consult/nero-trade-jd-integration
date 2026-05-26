@@ -42,6 +42,15 @@ public sealed class SyncRequestOrderStatusToUniconta(
             if (inventory == null || inventory.id == null)
             {
                 logger.LogWarning("No inventories available in JD. Aborting sync.");
+                await integrationLogger.LogAsync(new IntegrationLogEntry(
+                    supabaseOptions.IntegrationName, "warning", "JD", null,
+                    "No inventories available in JD — status sync skipped this tick.", null, null)
+                {
+                    CorrelationId = logScope.CorrelationId,
+                    ErrorCode = "JD_LOOKUP_MISS",
+                    Retryable = true,
+                    SuggestedAction = "Verify JD inventories endpoint is returning data; if no recent JD_LOOKUP_FAILED rows, JD legitimately has zero inventories configured."
+                }, token);
                 return;
             }
 

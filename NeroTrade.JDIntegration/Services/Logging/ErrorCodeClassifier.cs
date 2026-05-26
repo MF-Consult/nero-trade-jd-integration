@@ -1,4 +1,5 @@
 using System.Net;
+using NeroTrade.JDIntegration.Services.ExternalIntegration.Repositories;
 
 namespace NeroTrade.JDIntegration.Services.Logging;
 
@@ -8,6 +9,14 @@ public static class ErrorCodeClassifier
 {
     public static ClassifiedError Classify(Exception ex)
     {
+        if (ex is JdLookupFailedException jdLookup)
+        {
+            return new ClassifiedError(
+                "JD_LOOKUP_FAILED",
+                Retryable: true,
+                SuggestedAction: $"JD GET {jdLookup.Endpoint} returned status {jdLookup.StatusCode} after retries. Cache will serve stale on subsequent ticks; investigate JD side if it persists.");
+        }
+
         if (ex is TaskCanceledException or OperationCanceledException
             || ex.InnerException is TimeoutException)
         {
