@@ -204,6 +204,18 @@ public sealed class JdRepository : IJdRepository
         }
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var data = await JsonSerializer.DeserializeAsync<List<JdContainerType>>(stream, cancellationToken: cancellationToken) ?? new List<JdContainerType>();
+
+        // Defensive: a 200 OK with an empty list during a JD-side degradation would otherwise be
+        // cached as truth for a full TTL window and silently block any purchase-order sync that
+        // relies on container type lookup. Treat empty like a transient failure so JdReadCache
+        // serves the last good value instead. See the inventories sibling below for the canonical
+        // version of this argument.
+        if (data.Count == 0)
+        {
+            _logger.LogWarning("JD GET containertypes returned 200 OK but empty list — treating as transient failure");
+            throw new JdLookupFailedException("containertypes", 200, "Empty container types list");
+        }
+
         return data;
     }
 
@@ -218,6 +230,21 @@ public sealed class JdRepository : IJdRepository
         }
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var data = await JsonSerializer.DeserializeAsync<List<JdInventory>>(stream, cancellationToken: cancellationToken) ?? new List<JdInventory>();
+
+        // Closes the 2026-05-27 cache-poisoning hole: PR #2 stopped JdReadCache from storing empty
+        // lists when the loader threw, but a 200 OK with an empty array still bypassed it. JD's
+        // inventories endpoint has been observed returning an empty body during a JD-side
+        // degradation while simultaneously rejecting orders with "doesn't have any inventory items"
+        // — both are symptoms of the same upstream state, and 30-min dead windows for sales-sync
+        // followed. Treating empty like a non-success status forces JdReadCache down the
+        // stale-on-failure path (serve previous list + emit JD_LOOKUP_FAILED via
+        // LoadWithFailureLoggingAsync) instead of poisoning the cache for a full TTL.
+        if (data.Count == 0)
+        {
+            _logger.LogWarning("JD GET inventories returned 200 OK but empty list — treating as transient failure");
+            throw new JdLookupFailedException("inventories", 200, "Empty inventories list");
+        }
+
         return data;
     }
 

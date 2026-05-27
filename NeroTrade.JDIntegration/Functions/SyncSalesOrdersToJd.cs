@@ -266,8 +266,27 @@ public sealed class SyncSalesOrdersToJd(
             }, ct);
             statusSw.Stop();
             timings.UnicontaStatusUpdateMs += statusSw.ElapsedMilliseconds;
-            if (success) markedFailed++;
-            else logger.LogError("Failed to set SO {Order} group to Fejlet", failure.Item.SourceOrderNumber.Value);
+            if (success)
+            {
+                markedFailed++;
+            }
+            else
+            {
+                logger.LogError("Failed to set SO {Order} group to Fejlet", failure.Item.SourceOrderNumber.Value);
+                // Surface to integration_logs — without this, a silent Uniconta-side update failure
+                // would leave xTransferToJD=true and the order would heal "by itself" on the next
+                // tick without anyone knowing why, masking real Uniconta-side issues.
+                await integrationLogger.LogAsync(new IntegrationLogEntry(
+                    supabaseOptions.IntegrationName, "warning", "Uniconta", failure.Item.SourceOrderNumber.Value.ToString(),
+                    $"Failed to mark sales order {failure.Item.SourceOrderNumber} as Fejlet in Uniconta — xTransferToJD was NOT cleared and the order will be retried on the next tick.",
+                    null, null)
+                {
+                    CorrelationId = logScope.CorrelationId,
+                    ErrorCode = "UNICONTA_CRUD_FAILED",
+                    Retryable = true,
+                    SuggestedAction = "Inspect Uniconta connection/auth state; the order will retry on its own but the original JD reject reason will be re-applied each tick until this clears."
+                }, ct);
+            }
 
             await integrationLogger.LogAsync(new IntegrationLogEntry(
                 supabaseOptions.IntegrationName, "error", "JD", failure.Item.SourceOrderNumber.Value.ToString(),
