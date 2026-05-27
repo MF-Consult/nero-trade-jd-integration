@@ -191,7 +191,8 @@ Convention: `SUBSYSTEM_REASON`, SCREAMING_SNAKE. Extend freely — new codes don
 | `JD_LOOKUP_MISS`              | JD returned 404 for an expected record.                                                 |
 | `UNICONTA_DUPLICATE_SO`       | Multiple SOs collide on the same number.                                                |
 | `UNICONTA_LOOKUP_MISS`        | Expected Uniconta record absent.                                                        |
-| `UNICONTA_CRUD_FAILED`        | Uniconta write rejected (usually transient).                                            |
+| `UNICONTA_CRUD_FAILED`        | Generic Uniconta write rejected (usually transient). Use the more specific codes below when they apply. |
+| `UNICONTA_ORDER_STATUS_FAILED`| Sales-order Group/user-field update failed (mark-as-Created, mark-as-Fejlet, or JD→Uniconta status sync). Specific subtype of CRUD_FAILED so order-status incidents don't collide with debtor/contact/PO upsert failures. |
 | `UNICONTA_AUTH_FAILED`        | Uniconta session/credentials issue.                                                     |
 | `SHIPMONDO_NO_CARRIER`        | No carrier mapping found for an order's postal code.                                    |
 | `SHIPMONDO_INVALID_POSTAL`    | Postal code is malformed/unknown.                                                       |
