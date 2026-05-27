@@ -45,6 +45,17 @@ public sealed class IntegrationRun : IAsyncDisposable
     public long ElapsedMs => _stopwatch.ElapsedMilliseconds;
 
     /// <summary>
+    /// Why the run ended — surfaced on the completion row as <c>payload.exit_reason</c>. Lets
+    /// dead-window diagnosis distinguish "0 ms tick because nothing was eligible" from
+    /// "0 ms tick because a gate short-circuited the flow". Recommended values:
+    /// <c>"completed"</c>, <c>"no_eligible_orders"</c>, <c>"inventories_unavailable"</c>,
+    /// <c>"skipped_overlap"</c>, <c>"run_failed"</c>. Set explicitly per exit path in the
+    /// function body; defaults to <c>"completed"</c> in <see cref="DisposeAsync"/> when the run
+    /// did not fail and the caller did not specify, so an unset value still produces a meaningful row.
+    /// </summary>
+    public string? ExitReason { get; set; }
+
+    /// <summary>
     /// Attach counts/timings that the caller wants surfaced on the completion row. Anonymous object is fine —
     /// shape becomes the completion row's payload.
     /// </summary>
@@ -69,6 +80,10 @@ public sealed class IntegrationRun : IAsyncDisposable
 
         var classified = _failure is null ? null : ErrorCodeClassifier.Classify(_failure);
 
+        // Default the exit reason so a row never has a null value — easier to filter on in Supabase.
+        // Failure-with-unset wins over "completed" for obvious reasons.
+        var exitReason = ExitReason ?? (_failure is null ? "completed" : "run_failed");
+
         // Merge run_name + started/finished into payload alongside whatever the caller attached.
         var payloadObject = new
         {
@@ -76,6 +91,7 @@ public sealed class IntegrationRun : IAsyncDisposable
             started_at = _startedAt,
             finished_at = finishedAt,
             duration_ms = duration,
+            exit_reason = exitReason,
             counts = _completionPayload
         };
 

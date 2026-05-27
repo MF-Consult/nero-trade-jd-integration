@@ -54,6 +54,7 @@ public sealed class SyncSalesOrdersToJd(
             if (inventory == null || inventory.id == null)
             {
                 logger.LogWarning("No inventories available in JD");
+                run.ExitReason = "inventories_unavailable";
                 // Surface to integration_logs so a JD-returns-empty state is visible without grepping
                 // App Insights. With the JdReadCache fix, this should only fire on a cold start (no
                 // stale value cached) or if JD legitimately returns zero inventories.
@@ -120,6 +121,13 @@ public sealed class SyncSalesOrdersToJd(
 
             runStopwatch.Stop();
             timings.TotalRunMs = runStopwatch.ElapsedMilliseconds;
+
+            // Tag the exit reason so future dead-window analysis can grep payload.exit_reason
+            // directly instead of guessing from duration. "no_eligible_orders" covers the common
+            // case where Uniconta returned zero matches — the gate was open, the read fired, the
+            // filter just had nothing to do. Distinct from "inventories_unavailable" above which
+            // never reached the Uniconta read.
+            run.ExitReason = timings.OrdersRead > 0 ? "completed" : "no_eligible_orders";
 
             // Always log timings when we touched at least one order — the goal is to identify
             // which phase dominates the tick latency Maiwand sees. Skip when zero pending orders
@@ -245,7 +253,7 @@ public sealed class SyncSalesOrdersToJd(
                     null, null)
                 {
                     CorrelationId = logScope.CorrelationId,
-                    ErrorCode = "UNICONTA_CRUD_FAILED",
+                    ErrorCode = "UNICONTA_ORDER_STATUS_FAILED",
                     Retryable = true,
                     SuggestedAction = "Auto-recovers on next tick; if it persists, retry SO via /admin/retry-sales-order."
                 }, ct);
@@ -282,7 +290,7 @@ public sealed class SyncSalesOrdersToJd(
                     null, null)
                 {
                     CorrelationId = logScope.CorrelationId,
-                    ErrorCode = "UNICONTA_CRUD_FAILED",
+                    ErrorCode = "UNICONTA_ORDER_STATUS_FAILED",
                     Retryable = true,
                     SuggestedAction = "Inspect Uniconta connection/auth state; the order will retry on its own but the original JD reject reason will be re-applied each tick until this clears."
                 }, ct);

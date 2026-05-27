@@ -24,4 +24,8 @@
         </None>
     </ItemGroup>
 
+    <ItemGroup>
+        <InternalsVisibleTo Include="NeroTrade.JDIntegration.Tests" />
+    </ItemGroup>
+
 </Project>

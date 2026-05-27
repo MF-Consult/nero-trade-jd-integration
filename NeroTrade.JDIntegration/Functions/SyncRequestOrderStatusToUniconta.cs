@@ -172,7 +172,7 @@ public sealed class SyncRequestOrderStatusToUniconta(
                         JsonSerializer.SerializeToElement(new { orderNumber, targetGroup, currentGroup, jdStatus = jdOrder.status, jdStage = jdOrder.stage }))
                     {
                         CorrelationId = logScope.CorrelationId,
-                        ErrorCode = "UNICONTA_CRUD_FAILED",
+                        ErrorCode = "UNICONTA_ORDER_STATUS_FAILED",
                         Retryable = true,
                         SuggestedAction = "Auto-recovers on next tick (5 min); if persistent, call /admin/override-order-status."
                     }, token);

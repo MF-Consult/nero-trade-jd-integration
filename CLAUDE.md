@@ -8,14 +8,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build
 dotnet build
 
-# Build for release (as CI does)
-dotnet build --configuration Release --output ./output
+# Build for release (matches what CI does for deploy — function project only, not the .sln)
+dotnet build NeroTrade.JDIntegration/NeroTrade.JDIntegration.csproj --configuration Release --output ./output
 
 # Run locally (Azure Functions on port 8000)
 dotnet run --project NeroTrade.JDIntegration
+
+# Run unit tests
+dotnet test NeroTrade.JDIntegration.Tests/NeroTrade.JDIntegration.Tests.csproj
 ```
 
-No automated test suite exists. `TestGeneratePdf` is a manual HTTP-triggered function for testing PDF generation.
+Unit tests live in `NeroTrade.JDIntegration.Tests/`. They pin the JD repository / cache / classifier contracts that recent prod incidents have depended on (cache poisoning, request-message reuse, error-code mapping). CI runs them on every PR (`.github/workflows/pr-build-and-test.yml`) and again before deploy on master. `TestGeneratePdf` is still a manual HTTP-triggered function for ad-hoc PDF testing.
 
 ## Architecture Overview
 
@@ -88,7 +91,7 @@ Quick rules for in-session edits:
 - `JD_TIMEOUT`, `JD_AUTH_FAILED`, `JD_RATE_LIMITED`, `JD_5XX` — transport-level JD failures
 - `JD_VALIDATION_REJECTED` — JD accepted the request but rejected the payload (not retryable; needs data fix)
 - `JD_LOOKUP_MISS` — JD returned 404 for a record we expected
-- `UNICONTA_DUPLICATE_SO`, `UNICONTA_LOOKUP_MISS`, `UNICONTA_CRUD_FAILED`, `UNICONTA_AUTH_FAILED` — Uniconta-side
+- `UNICONTA_DUPLICATE_SO`, `UNICONTA_LOOKUP_MISS`, `UNICONTA_CRUD_FAILED`, `UNICONTA_ORDER_STATUS_FAILED`, `UNICONTA_AUTH_FAILED` — Uniconta-side. `UNICONTA_ORDER_STATUS_FAILED` is for sales-order Group/user-field update failures specifically (Created/Fejlet on push, JD→Uniconta status sync); other Uniconta writes keep `UNICONTA_CRUD_FAILED`.
 - `SHIPMONDO_NO_CARRIER`, `SHIPMONDO_INVALID_POSTAL` — Shipmondo carrier-mapping problems
 - `PDF_GENERATION_FAILED`, `BLOB_UPLOAD_FAILED` — delivery-note pipeline
 - `MAPPER_NULL_FIELD`, `MAPPER_INVALID_STATE` — code-level edge cases in mappers
