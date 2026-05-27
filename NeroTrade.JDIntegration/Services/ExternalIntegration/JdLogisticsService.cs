@@ -89,6 +89,7 @@ public sealed class JdLogisticsService(
                 if (created.ok)
                 {
                     result.SuccessCount++;
+                    result.CreatedItems.Add(address);
                     if (created.returned?.att != null) _existingByAtt[created.returned.att] = created.returned;
                 }
                 else
@@ -133,6 +134,7 @@ public sealed class JdLogisticsService(
                 if (created.ok)
                 {
                     result.SuccessCount++;
+                    result.CreatedItems.Add(item);
                     if (created.returned?.id != null) _existingItemsBySku[item.sku] = created.returned;
                 }
                 else
