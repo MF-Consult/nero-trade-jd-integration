@@ -78,7 +78,7 @@ public class DeliveryNotePdfService : IDeliveryNotePdfService
             row.RelativeItem().Column(column =>
             {
                 column.Item().AlignRight().Text("Nero Trade ApS").FontSize(9);
-                column.Item().AlignRight().Text("+45 24249620").FontSize(9);
+                column.Item().AlignRight().Text("+45 42429620").FontSize(9);
                 column.Item().AlignRight().Text("mb@nerotrade.dk").FontSize(9);
                 column.Item().AlignRight().Text("www.nerotrade.dk").FontSize(9);
                 column.Item().AlignRight().Text("CVR.: 41623799").FontSize(9);
@@ -245,10 +245,10 @@ public class DeliveryNotePdfService : IDeliveryNotePdfService
         .Text(text =>
         {
             text.Span("Nero Trade ApS | ").FontSize(7);
-            text.Span("Maglebjergvej 6 | ").FontSize(7);
-            text.Span("2800 Kongens Lyngby | ").FontSize(7);
+            text.Span("Lyngbyvej 83A | ").FontSize(7);
+            text.Span("2100 København Ø | ").FontSize(7);
             text.Span("Denmark | ").FontSize(7);
-            text.Span("Tlf.: +45 24249620 | ").FontSize(7);
+            text.Span("Tlf.: +45 42429620 | ").FontSize(7);
             text.Span("E-mail: mb@nerotrade.dk | ").FontSize(7);
             text.Span("www.nerotrade.dk | ").FontSize(7);
             text.Span("CVR-nr.: 41623799").FontSize(7);
