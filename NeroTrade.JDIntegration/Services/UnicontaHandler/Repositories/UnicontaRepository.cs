@@ -98,11 +98,42 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         }
     }
 
+    // Server-side filter window. Any order whose UpdatedAt is within this many minutes will be
+    // returned by the eligibility query. Window must be wide enough that an order which fails JD
+    // validation and is re-clicked by the user still re-appears within the window. 30 min is
+    // generous — typical click-to-sync flow is sub-minute, and a Fejlet re-click bumps UpdatedAt
+    // server-side, so the window resets on user action.
+    private static readonly TimeSpan SalesOrderRecentWindow = TimeSpan.FromMinutes(30);
+
     public async IAsyncEnumerable<LocalSalesOrder> ReadAllSalesOrdersAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
 
-        var orders = await queryApi.Query<DebtorOrderClient>((IEnumerable<PropValuePair>?)null);
+        // Filter server-side on UpdatedAt rather than pulling every sales order and filtering in
+        // memory. Two reasons:
+        //   1. Smaller payload (only recently-touched rows), so the tick is faster and cheaper.
+        //   2. The unfiltered path in `QueryAPI.Query<T>(null)` opts into `SetCache=true` which
+        //      participates in the SDK's session-level cache machinery — observed (2026-05-27) to
+        //      return server-cached snapshots that miss recent UI-side edits. A filtered query
+        //      takes the simpler code path (SetCache=false) and re-asks the server each tick.
+        var cutoff = DateTime.UtcNow - SalesOrderRecentWindow;
+        var recentFilter = new[]
+        {
+            PropValuePair.GenereteWhereElements("UpdatedAt", cutoff, CompareOperator.GreaterThanOrEqual, typeof(DateTime))
+        };
+
+        var querySw = System.Diagnostics.Stopwatch.StartNew();
+        var orders = await queryApi.Query<DebtorOrderClient>(recentFilter);
+        querySw.Stop();
+
+        // Diagnostic: lets us separate "Uniconta returned 0 rows" from "Uniconta returned N rows
+        // but none passed the eligibility filter". App Insights only — not integration_logs — to
+        // keep noise low. If we suspect server-side staleness in the future, this is the row to
+        // check (raw count vs. eligible count vs. session healthy).
+        _logger.LogInformation(
+            "Uniconta Query<DebtorOrderClient> updated_since={Cutoff:o}: raw_count={Count} query_ms={QueryMs} session_logged_in={Logged}",
+            cutoff, orders?.Length ?? -1, querySw.ElapsedMilliseconds, queryApi.LoggedIn);
+
         // An empty Group means the order has not yet been pushed to JD; "Fejlet" means a previous push
         // failed and is parked until a user re-sets Xoverfor1. On success SyncSalesOrdersToJd sets Group =
         // "Oprettet", and SyncRequestOrderStatusToUniconta later replaces it with the live JD status —

@@ -22,9 +22,19 @@ public sealed class UnicontaConnectionManager : IDisposable
     private DateTime _connectedAtUtc;
 
     // The connection manager is a singleton, so a session can live for the lifetime of the worker
-    // process. Uniconta sessions time out server-side after a period of inactivity (and can also be
-    // dropped by nightly server restarts), so we proactively reconnect once a session reaches this age.
-    private static readonly TimeSpan MaxSessionAge = TimeSpan.FromMinutes(30);
+    // process. Two reasons to recycle aggressively:
+    //  1. Uniconta sessions time out server-side after a period of inactivity (and can also be
+    //     dropped by nightly server restarts), so we need a periodic forced reconnect anyway.
+    //  2. Empirically (2026-05-27, ordre 2161): we observe a ~30 min cycle where queries within a
+    //     long-lived session return progressively staler views of the Uniconta data — order updates
+    //     done in the Uniconta UI weren't visible to our `Query<DebtorOrderClient>(null)` calls
+    //     until the next reconnect. SDK decompile confirmed our code path always hits the server,
+    //     so the staleness is per-session server-side. 90 sec caps customer-visible delay to ~2 min
+    //     worst case (one MaxSessionAge cycle + one 30 s polling interval).
+    // Cost: ~40 reconnects/hour per worker instance. Login+OpenCompany is ~500-1000 ms, so the
+    // occasional sales-sync tick that hits a reconnect goes from ~25 ms to ~1 s — still well under
+    // the 30 s timer interval.
+    private static readonly TimeSpan MaxSessionAge = TimeSpan.FromSeconds(90);
 
     public UnicontaConnectionManager(ILogger<UnicontaConnectionManager> logger, UnicontaConfig config)
     {
