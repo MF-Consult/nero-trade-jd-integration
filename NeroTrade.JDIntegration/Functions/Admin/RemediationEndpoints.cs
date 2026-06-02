@@ -20,7 +20,6 @@ namespace NeroTrade.JDIntegration.Functions.Admin;
 public sealed class RemediationEndpoints(
     IUnicontaService uniconta,
     IIntegrationLogger integrationLogger,
-    SupabaseOptions supabaseOptions,
     RemediationOptions remediationOptions,
     ILogger<RemediationEndpoints> logger)
 {
@@ -132,7 +131,7 @@ public sealed class RemediationEndpoints(
         {
             logger.LogError(ex, "Remediation endpoint threw");
             await integrationLogger.LogAsync(new IntegrationLogEntry(
-                supabaseOptions.IntegrationName, "error", "Integration", null,
+                integrationLogger.IntegrationName, "error", "Integration", null,
                 $"Remediation endpoint failed: {LogSanitizer.Describe(ex)}", null, null)
             {
                 CorrelationId = logScope.CorrelationId,
@@ -183,7 +182,7 @@ public sealed class RemediationEndpoints(
         CancellationToken cancellationToken)
     {
         await integrationLogger.LogAsync(new IntegrationLogEntry(
-            supabaseOptions.IntegrationName,
+            integrationLogger.IntegrationName,
             level,
             sourceSystem,
             externalId,

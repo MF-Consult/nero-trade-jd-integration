@@ -4,15 +4,21 @@ namespace NeroTrade.JDIntegration.Services.Logging;
 
 public interface IIntegrationLogger
 {
+    /// <summary>
+    /// Logical integration name written to <c>integration_name</c> on every row. Exposed here so call
+    /// sites don't need to inject the storage-backend options class just to read this string.
+    /// </summary>
+    string IntegrationName { get; }
+
     Task LogAsync(IntegrationLogEntry entry, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Opens a run scope: emits a "started" info row, starts a stopwatch, and returns a handle that
-    /// emits the matching "completed" row on dispose (level=error if <see cref="IntegrationRun.MarkFailed"/>
-    /// was called or an exception bubbled). Wraps every timer-driven sync function so kørselshistorikken
-    /// always has a paired start/finish + duration_ms.
+    /// Opens a run scope: starts a stopwatch and returns a handle that writes a single "completed" row
+    /// on dispose (level=error if <see cref="IntegrationRun.MarkFailed"/> was called or an exception
+    /// bubbled). The completion row carries started_at + duration_ms in payload, so an explicit start
+    /// event is duplicate noise.
     /// </summary>
-    IntegrationRun BeginRun(string runName, CancellationToken cancellationToken);
+    IntegrationRun BeginRun(string runName);
 
     /// <summary>
     /// Flips any still-open (status in 'open','ack') failure rows for the SAME external_id, project and

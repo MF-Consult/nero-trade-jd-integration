@@ -20,7 +20,6 @@ public sealed class SyncSalesOrdersToJd(
     SalesOrderMapper mapper,
     IDeliveryNotePdfService pdfService,
     IIntegrationLogger integrationLogger,
-    SupabaseOptions supabaseOptions,
     ILogger<SyncSalesOrdersToJd> logger)
 {
     private static readonly HttpClient FileUploadHttpClient = new() { Timeout = TimeSpan.FromMinutes(2) };
@@ -40,7 +39,7 @@ public sealed class SyncSalesOrdersToJd(
             return;
         }
 
-        await using var run = integrationLogger.BeginRun("SyncSalesOrdersToJd", cancellationToken);
+        await using var run = integrationLogger.BeginRun("SyncSalesOrdersToJd");
         var logScope = run.Scope;
         var timings = new RunTimings();
         var runStopwatch = Stopwatch.StartNew();
@@ -59,7 +58,7 @@ public sealed class SyncSalesOrdersToJd(
                 // App Insights. With the JdReadCache fix, this should only fire on a cold start (no
                 // stale value cached) or if JD legitimately returns zero inventories.
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "warning", "JD", null,
+                    integrationLogger.IntegrationName, "warning", "JD", null,
                     "No inventories available in JD — sales-order sync skipped this tick.", null, null)
                 {
                     CorrelationId = logScope.CorrelationId,
@@ -140,63 +139,40 @@ public sealed class SyncSalesOrdersToJd(
                     timings.BlobUploadMs, timings.JdVerifyFileMs, timings.JdUpsertMs, timings.UnicontaStatusUpdateMs,
                     timings.OrdersRead, timings.PdfsSucceeded, timings.PdfsFailed);
 
-                await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "info", "Integration", null,
-                    $"SyncSalesOrdersToJd completed in {timings.TotalRunMs} ms: {totalSucceeded} succeeded, {totalFailed} failed (read {timings.OrdersRead}).",
-                    null,
-                    JsonSerializer.SerializeToElement(new
-                    {
-                        processed = totalProcessed,
-                        succeeded = totalSucceeded,
-                        failed = totalFailed,
-                        timings_ms = new
-                        {
-                            total = timings.TotalRunMs,
-                            uniconta_read = timings.UnicontaReadMs,
-                            pdf_gen = timings.PdfGenMs,
-                            jd_create_file = timings.JdCreateFileMs,
-                            blob_upload = timings.BlobUploadMs,
-                            jd_verify_file = timings.JdVerifyFileMs,
-                            jd_upsert = timings.JdUpsertMs,
-                            uniconta_status_update = timings.UnicontaStatusUpdateMs
-                        },
-                        counts = new
-                        {
-                            orders_read = timings.OrdersRead,
-                            pdfs_succeeded = timings.PdfsSucceeded,
-                            pdfs_failed = timings.PdfsFailed,
-                            jd_batches = timings.JdBatchCount
-                        }
-                    }))
-                {
-                    CorrelationId = logScope.CorrelationId
-                }, cancellationToken);
-
+                // Single completion row — IntegrationRun.DisposeAsync writes it with this payload
+                // wrapped under `counts`, plus run_name/started_at/finished_at/duration_ms.
                 run.AttachCompletionPayload(new
                 {
                     processed = totalProcessed,
                     succeeded = totalSucceeded,
                     failed = totalFailed,
-                    orders_read = timings.OrdersRead
+                    timings_ms = new
+                    {
+                        total = timings.TotalRunMs,
+                        uniconta_read = timings.UnicontaReadMs,
+                        pdf_gen = timings.PdfGenMs,
+                        jd_create_file = timings.JdCreateFileMs,
+                        blob_upload = timings.BlobUploadMs,
+                        jd_verify_file = timings.JdVerifyFileMs,
+                        jd_upsert = timings.JdUpsertMs,
+                        uniconta_status_update = timings.UnicontaStatusUpdateMs
+                    },
+                    counts = new
+                    {
+                        orders_read = timings.OrdersRead,
+                        pdfs_succeeded = timings.PdfsSucceeded,
+                        pdfs_failed = timings.PdfsFailed,
+                        jd_batches = timings.JdBatchCount
+                    }
                 });
+                }
             }
-        }
-        catch (Exception ex)
-        {
-            run.MarkFailed(ex);
-            logger.LogError(ex, "SyncSalesOrdersToJd failed");
-            var classified = ErrorCodeClassifier.Classify(ex);
-            await integrationLogger.LogAsync(new IntegrationLogEntry(
-                supabaseOptions.IntegrationName, "error", "Integration", null,
-                $"SyncSalesOrdersToJd run failed: {LogSanitizer.Describe(ex)}", null, null)
+            catch (Exception ex)
             {
-                CorrelationId = logScope.CorrelationId,
-                ErrorCode = classified.ErrorCode,
-                Retryable = classified.Retryable,
-                SuggestedAction = classified.SuggestedAction
-            }, CancellationToken.None);
-            throw;
-        }
+                run.MarkFailed(ex);
+                logger.LogError(ex, "SyncSalesOrdersToJd failed");
+                throw;
+            }
         finally
         {
             RunLock.Release();
@@ -233,13 +209,13 @@ public sealed class SyncSalesOrdersToJd(
             {
                 markedCreated++;
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "info", "Integration", order.SourceOrderNumber.Value.ToString(),
+                    integrationLogger.IntegrationName, "info", "Integration", order.SourceOrderNumber.Value.ToString(),
                     $"Sales order {order.SourceOrderNumber} synced to JD.", null, null)
                 {
                     CorrelationId = logScope.CorrelationId
                 }, ct);
                 await integrationLogger.MarkResolvedAsync(
-                    supabaseOptions.IntegrationName,
+                    integrationLogger.IntegrationName,
                     order.SourceOrderNumber.Value.ToString(),
                     logScope.CorrelationId,
                     ct);
@@ -248,7 +224,7 @@ public sealed class SyncSalesOrdersToJd(
             {
                 logger.LogError("Failed to set SO {Order} group to Oprettet", order.SourceOrderNumber.Value);
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "warning", "Uniconta", order.SourceOrderNumber.Value.ToString(),
+                    integrationLogger.IntegrationName, "warning", "Uniconta", order.SourceOrderNumber.Value.ToString(),
                     $"Sales order {order.SourceOrderNumber} was sent to JD but the Uniconta status update failed; will retry next run.",
                     null, null)
                 {
@@ -285,7 +261,7 @@ public sealed class SyncSalesOrdersToJd(
                 // would leave xTransferToJD=true and the order would heal "by itself" on the next
                 // tick without anyone knowing why, masking real Uniconta-side issues.
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "warning", "Uniconta", failure.Item.SourceOrderNumber.Value.ToString(),
+                    integrationLogger.IntegrationName, "warning", "Uniconta", failure.Item.SourceOrderNumber.Value.ToString(),
                     $"Failed to mark sales order {failure.Item.SourceOrderNumber} as Fejlet in Uniconta — xTransferToJD was NOT cleared and the order will be retried on the next tick.",
                     null, null)
                 {
@@ -297,7 +273,7 @@ public sealed class SyncSalesOrdersToJd(
             }
 
             await integrationLogger.LogAsync(new IntegrationLogEntry(
-                supabaseOptions.IntegrationName, "error", "JD", failure.Item.SourceOrderNumber.Value.ToString(),
+                integrationLogger.IntegrationName, "error", "JD", failure.Item.SourceOrderNumber.Value.ToString(),
                 $"JD rejected sales order {failure.Item.SourceOrderNumber}: {LogSanitizer.Sanitize(failure.Message)}", null,
                 JsonSerializer.SerializeToElement(new { errorMessage = failure.Message, sourceOrderNumber = failure.Item.SourceOrderNumber }))
             {
@@ -434,7 +410,7 @@ public sealed class SyncSalesOrdersToJd(
 
     private Task EmitPdfFailureAsync(string externalId, string errorCode, string message, string suggestedAction, IntegrationLogScope logScope, CancellationToken ct) =>
         integrationLogger.LogAsync(new IntegrationLogEntry(
-            supabaseOptions.IntegrationName, "warning", "Integration", externalId,
+            integrationLogger.IntegrationName, "warning", "Integration", externalId,
             message, null, null)
         {
             CorrelationId = logScope.CorrelationId,

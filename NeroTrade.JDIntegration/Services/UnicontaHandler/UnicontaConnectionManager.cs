@@ -213,9 +213,7 @@ public sealed class UnicontaConnectionManager : IDisposable
             _logger.LogInformation("Successfully logged in to Uniconta API");
 
             _logger.LogInformation("Opening company with ID: {CompanyId}", _config.CompanyId);
-            _company = await _session.OpenCompany(_config.CompanyId, true);
-            if (_company == null)
-                throw new InvalidOperationException($"Failed to get company with ID: {_config.CompanyId}");
+            _company = await OpenCompanyWithRetryAsync();
 
             _connectedAtUtc = DateTime.UtcNow;
             _logger.LogInformation("Successfully connected to company: {CompanyName} (ID: {CompanyId})", _company.Name, _company.CompanyId);
@@ -227,6 +225,44 @@ public sealed class UnicontaConnectionManager : IDisposable
             _session = null;
             _company = null;
             throw;
+        }
+    }
+
+    private const int OpenCompanyRetryDelayMs = 300;
+
+    // OpenCompany intermittently returns null (or throws) for a valid company id — a fast, server-side
+    // transient miss that was crashing otherwise-healthy reconnects (e.g. company 129192). Login has
+    // already succeeded by the time we get here, so one immediate retry on the same session heals the
+    // miss. A genuinely persistent failure still falls through and throws, so real Uniconta downtime is
+    // not hidden. One retry only — failures are fast and the sync timers fire often, so a growing backoff
+    // would just delay the next clean run. Caller must hold _connectGate (only called from ConnectAsync).
+    private async Task<Company> OpenCompanyWithRetryAsync()
+    {
+        const int maxRetries = 1;
+        for (int attempt = 0; ; attempt++)
+        {
+            Company? company = null;
+            Exception? failure = null;
+            try
+            {
+                company = await _session!.OpenCompany(_config.CompanyId, true);
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+
+            if (company != null)
+                return company;
+
+            if (attempt >= maxRetries)
+                throw failure ?? new InvalidOperationException($"Failed to get company with ID: {_config.CompanyId}");
+
+            _logger.LogWarning(
+                failure,
+                "OpenCompany returned no company for ID {CompanyId} on attempt {Attempt}; retrying once after {DelayMs} ms",
+                _config.CompanyId, attempt + 1, OpenCompanyRetryDelayMs);
+            await Task.Delay(OpenCompanyRetryDelayMs);
         }
     }
 

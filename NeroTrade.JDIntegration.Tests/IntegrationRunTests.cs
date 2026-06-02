@@ -15,7 +15,7 @@ public class IntegrationRunTests
     {
         var logger = new RecordingIntegrationLogger();
 
-        await using (var run = logger.BeginRun("TestRun", CancellationToken.None))
+        await using (var run = logger.BeginRun("TestRun"))
         {
             // No ExitReason set, no failure → defaults to "completed".
         }
@@ -30,7 +30,7 @@ public class IntegrationRunTests
     {
         var logger = new RecordingIntegrationLogger();
 
-        await using (var run = logger.BeginRun("TestRun", CancellationToken.None))
+        await using (var run = logger.BeginRun("TestRun"))
         {
             run.ExitReason = "no_eligible_orders";
         }
@@ -44,7 +44,7 @@ public class IntegrationRunTests
     {
         var logger = new RecordingIntegrationLogger();
 
-        await using (var run = logger.BeginRun("TestRun", CancellationToken.None))
+        await using (var run = logger.BeginRun("TestRun"))
         {
             run.MarkFailed(new InvalidOperationException("boom"));
         }
@@ -59,7 +59,7 @@ public class IntegrationRunTests
     {
         var logger = new RecordingIntegrationLogger();
 
-        await using (var run = logger.BeginRun("TestRun", CancellationToken.None))
+        await using (var run = logger.BeginRun("TestRun"))
         {
             run.ExitReason = "completed";
             run.AttachCompletionPayload(new { processed = 3, succeeded = 2, failed = 1 });
@@ -81,14 +81,16 @@ public class IntegrationRunTests
     {
         public List<IntegrationLogEntry> Entries { get; } = new();
 
+        public string IntegrationName => "NeroTrade.JDIntegration.Tests";
+
         public Task LogAsync(IntegrationLogEntry entry, CancellationToken cancellationToken)
         {
             Entries.Add(entry);
             return Task.CompletedTask;
         }
 
-        public IntegrationRun BeginRun(string runName, CancellationToken cancellationToken)
-            => new(this, "NeroTrade.JDIntegration.Tests", runName, cancellationToken);
+        public IntegrationRun BeginRun(string runName)
+            => new(this, IntegrationName, runName);
 
         public Task MarkResolvedAsync(string integrationName, string externalId, Guid successCorrelationId, CancellationToken cancellationToken)
             => Task.CompletedTask;

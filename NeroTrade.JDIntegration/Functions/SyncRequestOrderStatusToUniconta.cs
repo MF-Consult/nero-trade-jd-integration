@@ -16,7 +16,6 @@ public sealed class SyncRequestOrderStatusToUniconta(
     IUnicontaService uniconta,
     IOptions<StatusMappingConfig> config,
     IIntegrationLogger integrationLogger,
-    SupabaseOptions supabaseOptions,
     ILogger<SyncRequestOrderStatusToUniconta> logger)
 {
     private readonly StatusMappingConfig _config = config.Value;
@@ -27,7 +26,7 @@ public sealed class SyncRequestOrderStatusToUniconta(
     // marginal feedback-latency gain. JD→Uniconta status updates can lag up to 5 min as a result.
     public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
-        await using var run = integrationLogger.BeginRun("SyncRequestOrderStatusToUniconta", cancellationToken);
+        await using var run = integrationLogger.BeginRun("SyncRequestOrderStatusToUniconta");
         var logScope = run.Scope;
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });
         logger.LogInformation("SyncRequestOrderStatusToUniconta started");
@@ -43,7 +42,7 @@ public sealed class SyncRequestOrderStatusToUniconta(
             {
                 logger.LogWarning("No inventories available in JD. Aborting sync.");
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "warning", "JD", null,
+                    integrationLogger.IntegrationName, "warning", "JD", null,
                     "No inventories available in JD — status sync skipped this tick.", null, null)
                 {
                     CorrelationId = logScope.CorrelationId,
@@ -152,13 +151,13 @@ public sealed class SyncRequestOrderStatusToUniconta(
                 {
                     updatedCount++;
                     await integrationLogger.LogAsync(new IntegrationLogEntry(
-                        supabaseOptions.IntegrationName, "info", "Integration", orderNumber.ToString(),
+                        integrationLogger.IntegrationName, "info", "Integration", orderNumber.ToString(),
                         $"Sales order {orderNumber} status updated to '{targetGroup}' from JD.", null, null)
                     {
                         CorrelationId = logScope.CorrelationId
                     }, token);
                     await integrationLogger.MarkResolvedAsync(
-                        supabaseOptions.IntegrationName,
+                        integrationLogger.IntegrationName,
                         orderNumber.ToString(),
                         logScope.CorrelationId,
                         token);
@@ -167,7 +166,7 @@ public sealed class SyncRequestOrderStatusToUniconta(
                 {
                     errorCount++;
                     await integrationLogger.LogAsync(new IntegrationLogEntry(
-                        supabaseOptions.IntegrationName, "error", "Uniconta", orderNumber.ToString(),
+                        integrationLogger.IntegrationName, "error", "Uniconta", orderNumber.ToString(),
                         $"Failed to update sales order {orderNumber} status to '{targetGroup}' in Uniconta.", null,
                         JsonSerializer.SerializeToElement(new { orderNumber, targetGroup, currentGroup, jdStatus = jdOrder.status, jdStage = jdOrder.stage }))
                     {
@@ -184,32 +183,13 @@ public sealed class SyncRequestOrderStatusToUniconta(
 
             if (updatedCount > 0 || errorCount > 0)
             {
-                await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "info", "Integration", null,
-                    $"SyncRequestOrderStatusToUniconta completed: {updatedCount} updated, {errorCount} errors, {skippedCount} unchanged.",
-                    null,
-                    JsonSerializer.SerializeToElement(new { updated = updatedCount, errors = errorCount, skipped = skippedCount }))
-                {
-                    CorrelationId = logScope.CorrelationId
-                }, token);
+                run.AttachCompletionPayload(new { processed = updatedCount + errorCount + skippedCount, succeeded = updatedCount, failed = errorCount, skipped = skippedCount });
             }
-
-            run.AttachCompletionPayload(new { processed = updatedCount + errorCount + skippedCount, succeeded = updatedCount, failed = errorCount, skipped = skippedCount });
         }
         catch (Exception ex)
         {
             run.MarkFailed(ex);
             logger.LogError(ex, "Error during Request Order Status Sync");
-            var classified = ErrorCodeClassifier.Classify(ex);
-            await integrationLogger.LogAsync(new IntegrationLogEntry(
-                supabaseOptions.IntegrationName, "error", "Integration", null,
-                $"SyncRequestOrderStatusToUniconta run failed: {LogSanitizer.Describe(ex)}", null, null)
-            {
-                CorrelationId = logScope.CorrelationId,
-                ErrorCode = classified.ErrorCode,
-                Retryable = classified.Retryable,
-                SuggestedAction = classified.SuggestedAction
-            }, CancellationToken.None);
             throw;
         }
     }

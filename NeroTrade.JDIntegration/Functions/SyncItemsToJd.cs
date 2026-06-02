@@ -14,13 +14,12 @@ public sealed class SyncItemsToJd(
     ItemMapper mapper,
     IJdLogisticsService jd,
     IIntegrationLogger integrationLogger,
-    SupabaseOptions supabaseOptions,
     ILogger<SyncItemsToJd> logger)
 {
     [Function("SyncItemsToJd")]
     public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
-        await using var run = integrationLogger.BeginRun("SyncItemsToJd", cancellationToken);
+        await using var run = integrationLogger.BeginRun("SyncItemsToJd");
         var logScope = run.Scope;
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });
         logger.LogInformation("SyncItemsToJd started");
@@ -52,32 +51,13 @@ public sealed class SyncItemsToJd(
 
             if (totalPrepared > 0)
             {
-                await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "info", "Integration", null,
-                    $"SyncItemsToJd completed: {totalSucceeded} succeeded, {totalFailed} failed (read {totalPrepared}).",
-                    null,
-                    JsonSerializer.SerializeToElement(new { prepared = totalPrepared, succeeded = totalSucceeded, failed = totalFailed }))
-                {
-                    CorrelationId = logScope.CorrelationId
-                }, cancellationToken);
+                run.AttachCompletionPayload(new { prepared = totalPrepared, succeeded = totalSucceeded, failed = totalFailed });
             }
-
-            run.AttachCompletionPayload(new { prepared = totalPrepared, succeeded = totalSucceeded, failed = totalFailed });
         }
         catch (Exception ex)
         {
             run.MarkFailed(ex);
             logger.LogError(ex, "SyncItemsToJd failed");
-            var classified = ErrorCodeClassifier.Classify(ex);
-            await integrationLogger.LogAsync(new IntegrationLogEntry(
-                supabaseOptions.IntegrationName, "error", "Integration", null,
-                $"SyncItemsToJd run failed: {LogSanitizer.Describe(ex)}", null, null)
-            {
-                CorrelationId = logScope.CorrelationId,
-                ErrorCode = classified.ErrorCode,
-                Retryable = classified.Retryable,
-                SuggestedAction = classified.SuggestedAction
-            }, CancellationToken.None);
             throw;
         }
     }
@@ -99,13 +79,13 @@ public sealed class SyncItemsToJd(
         {
             if (string.IsNullOrWhiteSpace(created.sku)) continue;
             await integrationLogger.LogAsync(new IntegrationLogEntry(
-                supabaseOptions.IntegrationName, "info", "Integration", created.sku,
+                integrationLogger.IntegrationName, "info", "Integration", created.sku,
                 $"Catalog item {created.sku} created in JD.", null, null)
             {
                 CorrelationId = logScope.CorrelationId
             }, ct);
             await integrationLogger.MarkResolvedAsync(
-                supabaseOptions.IntegrationName,
+                integrationLogger.IntegrationName,
                 created.sku,
                 logScope.CorrelationId,
                 ct);
@@ -114,7 +94,7 @@ public sealed class SyncItemsToJd(
         foreach (var failure in result.Failures)
         {
             await integrationLogger.LogAsync(new IntegrationLogEntry(
-                supabaseOptions.IntegrationName, "error", "JD", failure.Item.sku,
+                integrationLogger.IntegrationName, "error", "JD", failure.Item.sku,
                 $"JD rejected catalog item {failure.Item.sku}: {LogSanitizer.Sanitize(failure.Message)}", null,
                 JsonSerializer.SerializeToElement(new { status = failure.Status, message = failure.Message, sku = failure.Item.sku }))
             {

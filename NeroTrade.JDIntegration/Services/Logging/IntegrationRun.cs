@@ -4,16 +4,16 @@ using System.Text.Json;
 namespace NeroTrade.JDIntegration.Services.Logging;
 
 /// <summary>
-/// Run-scope wrapper for a single sync invocation. Emits a "started" info row at construction,
-/// runs a stopwatch, and writes a paired "completed" row in DisposeAsync — including the case
-/// where an exception bubbles, so kørselshistorikken always sees both start and finish + duration_ms.
+/// Run-scope wrapper for a single sync invocation. Starts a stopwatch at construction and writes a
+/// single "completed" row in DisposeAsync — including the case where an exception bubbles — carrying
+/// started_at + duration_ms in payload. No separate "started" row is emitted; the completion row alone
+/// satisfies the heartbeat, so kørselshistorikken stays one-row-per-run instead of two.
 /// </summary>
 public sealed class IntegrationRun : IAsyncDisposable
 {
     private readonly IIntegrationLogger _logger;
     private readonly string _integrationName;
     private readonly string _runName;
-    private readonly CancellationToken _cancellationToken;
     private readonly Stopwatch _stopwatch;
     private readonly DateTimeOffset _startedAt;
 
@@ -24,13 +24,11 @@ public sealed class IntegrationRun : IAsyncDisposable
     internal IntegrationRun(
         IIntegrationLogger logger,
         string integrationName,
-        string runName,
-        CancellationToken cancellationToken)
+        string runName)
     {
         _logger = logger;
         _integrationName = integrationName;
         _runName = runName;
-        _cancellationToken = cancellationToken;
         _startedAt = DateTimeOffset.UtcNow;
         _stopwatch = Stopwatch.StartNew();
 

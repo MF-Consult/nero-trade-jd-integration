@@ -95,8 +95,9 @@ public class IncomingShipmentCatalogResolutionTests
 
     private sealed class NoOpIntegrationLogger : IIntegrationLogger
     {
+        public string IntegrationName => "NeroTrade.JDIntegration.Tests";
         public Task LogAsync(IntegrationLogEntry entry, CancellationToken cancellationToken) => Task.CompletedTask;
-        public IntegrationRun BeginRun(string runName, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public IntegrationRun BeginRun(string runName) => throw new NotSupportedException();
         public Task MarkResolvedAsync(string integrationName, string externalId, Guid successCorrelationId, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 

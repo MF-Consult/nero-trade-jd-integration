@@ -12,7 +12,6 @@ public sealed class SupabaseIntegrationLogger : IIntegrationLogger
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<SupabaseIntegrationLogger> _logger;
-    private readonly string _integrationName;
     private readonly string _project;
 
     public SupabaseIntegrationLogger(
@@ -22,9 +21,11 @@ public sealed class SupabaseIntegrationLogger : IIntegrationLogger
     {
         _httpClient = httpClient;
         _logger = logger;
-        _integrationName = options.IntegrationName;
+        IntegrationName = options.IntegrationName;
         _project = options.Project;
     }
+
+    public string IntegrationName { get; }
 
     public async Task LogAsync(IntegrationLogEntry entry, CancellationToken cancellationToken)
     {
@@ -66,8 +67,7 @@ public sealed class SupabaseIntegrationLogger : IIntegrationLogger
         }
     }
 
-    public IntegrationRun BeginRun(string runName, CancellationToken cancellationToken) =>
-        new(this, _integrationName, runName, cancellationToken);
+    public IntegrationRun BeginRun(string runName) => new(this, IntegrationName, runName);
 
     public async Task MarkResolvedAsync(
         string integrationName,
