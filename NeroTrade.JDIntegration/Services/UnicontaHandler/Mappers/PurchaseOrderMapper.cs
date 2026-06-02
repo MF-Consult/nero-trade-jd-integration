@@ -24,11 +24,14 @@ public sealed class PurchaseOrderMapper
             {
                 quantity = (int)Math.Round(line.Quantity),
                 isSubItem = line.IsSubItem,
-                externalIdentification = string.IsNullOrWhiteSpace(line.CustomerItemNumber) 
-                    ? null 
+                externalIdentification = string.IsNullOrWhiteSpace(line.CustomerItemNumber)
+                    ? null
                     : line.CustomerItemNumber,
                 Sku = line.Sku,
-                catalog = new JdIncomingShipmentCatalogRef { id = 0 },
+                // catalog is intentionally left null here. JD matches a line to a catalog item
+                // solely via catalog.id, so it is resolved against JD's catalog in
+                // JdLogisticsService before the shipment is sent. A line that cannot be resolved
+                // must fail loudly rather than be sent with a bogus id (JD would register "Ukendt").
                 unit = line.Unit
             });
         }

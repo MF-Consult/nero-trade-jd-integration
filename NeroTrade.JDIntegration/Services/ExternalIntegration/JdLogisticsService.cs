@@ -184,7 +184,22 @@ public sealed class JdLogisticsService(
                 continue;
             }
 
-            await AttemptToResolveCatalogItemsAsync(shipment, cancellationToken);
+            // JD matches an incoming-shipment line to a catalog item ONLY via catalog.id. If we
+            // cannot resolve a line's SKU to a real catalog id we must NOT send it: JD would
+            // register the line as "Ukendt" and the warehouse would not know what it received.
+            // Fail the whole shipment so the caller parks the PO for manual handling with the SKUs.
+            var unresolvedSkus = ResolveCatalogItems(shipment);
+            if (unresolvedSkus.Count > 0)
+            {
+                var skuList = string.Join(", ", unresolvedSkus);
+                _logger.LogWarning(
+                    "Incoming shipment '{Text}' has {Count} line(s) with no matching JD catalog item: {Skus}",
+                    shipment.text, unresolvedSkus.Count, skuList);
+                result.Failures.Add(new UpsertFailure<JdIncomingShipmentCreate>(shipment, 0,
+                    $"No matching JD catalog item for SKU(s): {skuList}. The item must exist in JD's catalog (synced via SyncItemsToJd) before this purchase order can be received."));
+                continue;
+            }
+
             await SetContainerTypesAsync(shipment, cancellationToken);
 
             var upsert = await repository.UpsertIncomingShipmentAsync(shipment, cancellationToken);
@@ -419,22 +434,32 @@ public sealed class JdLogisticsService(
         return false;
     }
 
-    private async Task AttemptToResolveCatalogItemsAsync(JdIncomingShipmentCreate shipment, CancellationToken cancellationToken)
+    /// <summary>
+    /// Resolves each line's catalog reference (<c>catalog.id</c>) against JD's catalog by SKU —
+    /// the only identifier JD uses to match a line to a catalog item. Returns the SKUs of any
+    /// lines that could not be matched so the caller can fail the shipment instead of silently
+    /// sending a line JD would register as "Ukendt".
+    /// </summary>
+    private List<string> ResolveCatalogItems(JdIncomingShipmentCreate shipment)
     {
-        if (shipment.lines.Count == 0) return;
+        var unresolved = new List<string>();
         foreach (var line in shipment.lines)
         {
-            // Use Sku for lookup if available, otherwise try externalIdentification (fallback)
-            var skuToLookup = !string.IsNullOrWhiteSpace(line.Sku) ? line.Sku : line.externalIdentification;
+            // Use Sku for lookup if available, otherwise try externalIdentification (fallback).
+            // Trim to match the catalog cache, which is keyed on the trimmed SKU (see ItemMapper).
+            var skuToLookup = (!string.IsNullOrWhiteSpace(line.Sku) ? line.Sku : line.externalIdentification)?.Trim();
 
-            if (string.IsNullOrWhiteSpace(skuToLookup)) continue;
-
-            if (_existingItemsBySku.TryGetValue(skuToLookup, out var item) && item.id.HasValue)
+            if (!string.IsNullOrWhiteSpace(skuToLookup)
+                && _existingItemsBySku!.TryGetValue(skuToLookup, out var item)
+                && item.id.HasValue)
             {
                 line.catalog = new JdIncomingShipmentCatalogRef { id = item.id.Value };
                 continue;
             }
+
+            unresolved.Add(string.IsNullOrWhiteSpace(line.Sku) ? "(missing SKU)" : line.Sku);
         }
+        return unresolved;
     }
 
     private async Task SetContainerTypesAsync(JdIncomingShipmentCreate shipment, CancellationToken cancellationToken)
