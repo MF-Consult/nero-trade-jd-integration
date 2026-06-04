@@ -19,7 +19,7 @@ public sealed class SyncPurchaseOrdersToJd(
     ILogger<SyncPurchaseOrdersToJd> logger)
 {
     [Function("SyncPurchaseOrdersToJd")]
-    public async Task RunAsync([TimerTrigger("*/40 * * * * *")] TimerInfo timer)
+    public async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo timer)
     {
         var correlationId = Guid.NewGuid().ToString("N");
         using var cts = new CancellationTokenSource();
