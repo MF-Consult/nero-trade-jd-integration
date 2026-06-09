@@ -75,22 +75,19 @@ public sealed class SyncRequestOrderStatusToUniconta(
             int errorCount = 0;
             int skippedCount = 0;
 
-            // Collapse to the most recent JD order per Uniconta SO number. A cancelled order can linger
-            // in JD (it is excluded from outbound dedup but JD never hard-removes it) alongside a freshly
-            // created one sharing the same "SO {n}" reference. Iterating all of them would let whichever
-            // is processed last win — so Uniconta could be set to the stale cancelled order's status.
-            // Highest JD id = most recently created order, i.e. the one whose status is current.
-            var latestPerOrderNumber = jdOrders
+            // A cancelled JD order can linger (excluded from outbound dedup but JD never hard-removes it)
+            // alongside a freshly created one sharing the same "SO {n}" reference. Group all JD orders by
+            // SO number and let PickWinner choose the live, most-progressed one, so Uniconta reflects the
+            // current order's status rather than a stale cancelled one.
+            var ordersByNumber = jdOrders
                 .Where(o => o.status != null)
                 .Select(o => new { Order = o, OrderNumber = JdOrderHelper.GetOrderNumber(o.shopOrderId, o.text, o.deliveryNoteText) })
                 .Where(x => x.OrderNumber != 0)
-                .GroupBy(x => x.OrderNumber)
-                .Select(g => g.OrderByDescending(x => x.Order.id ?? 0).First());
+                .GroupBy(x => x.OrderNumber);
 
-            foreach (var entry in latestPerOrderNumber)
+            foreach (var group in ordersByNumber)
             {
-                var jdOrder = entry.Order;
-                var orderNumber = entry.OrderNumber;
+                var orderNumber = group.Key;
 
                 // Check if we have this order in Uniconta
                 if (!unicontaOrders.TryGetValue(orderNumber, out var currentGroup))
@@ -99,7 +96,7 @@ public sealed class SyncRequestOrderStatusToUniconta(
                     continue;
                 }
 
-                var candidates = soGroup.Select(p => p.jdOrder).ToList();
+                var candidates = group.Select(x => x.Order).ToList();
                 var jdOrder = PickWinner(candidates);
 
                 if (candidates.Count > 1)
