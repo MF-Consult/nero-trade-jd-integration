@@ -21,13 +21,13 @@ public static class UnicontaUserFields
     public const string IntegrationIssue = "xIntegrationIssue";
 
     // Sales order fields.
-    public const string TrackingNote = "xSporingsnote";
-    public const string DeliveryNoteText = "xNoteflgseddel";
-    public const string Remark = "xBemaerk";
+    public const string TrackingNote = "xTrackingNote";
+    public const string DeliveryNoteText = "xTrackingNoteOnLabel";
+    public const string Remark = "xRemarksForJD";
     public const string DeliveryType = "xDeliveryType";
-    public const string TransportType = "xTransporttype";
-    public const string DeliveryTime = "xtidspunkt";
-    public const string CarrierMessage = "xbesked";
+    public const string TransportType = "xTransportTypes";
+    public const string DeliveryTime = "xTimeForDelivery";
+    public const string CarrierMessage = "xMessageForTransport";
 
     // Item references.
     public const string ExternalSku = "xExternalSku";
