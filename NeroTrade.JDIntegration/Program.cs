@@ -17,10 +17,6 @@ var builder = FunctionsApplication.CreateBuilder(args);
 
 builder.ConfigureFunctionsWebApplication();
 
-builder.Services
-    .AddApplicationInsightsTelemetryWorkerService()
-    .ConfigureFunctionsApplicationInsights();
-
 // Optional: builder.ConfigurationBuilder.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
 
 // Bind JD settings
@@ -33,6 +29,15 @@ builder.Services.Configure<StatusMappingConfig>(builder.Configuration.GetSection
 // Supabase integration logging
 builder.Services.Configure<SupabaseOptions>(builder.Configuration.GetSection("Supabase"));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<SupabaseOptions>>().Value);
+
+// IntegrationLogScope is instantiated per-invocation inside each function — not via DI.
+// Reason: the isolated worker does not create a fresh DI scope per timer trigger, so a Scoped
+// lifetime collapses into a singleton and correlation ids leak across concurrent runs.
+
+// Remediation endpoints (Phase 2). Shared secret is checked on every /admin/* call; endpoints
+// refuse to run when SharedSecret is unset so the surface cannot accidentally go live unauthenticated.
+builder.Services.Configure<RemediationOptions>(builder.Configuration.GetSection(RemediationOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<RemediationOptions>>().Value);
 
 var supabaseSection = builder.Configuration.GetSection("Supabase");
 var supabaseBaseUrl = supabaseSection["BaseUrl"];

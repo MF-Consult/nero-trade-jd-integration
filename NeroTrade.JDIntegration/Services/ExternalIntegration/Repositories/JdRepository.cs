@@ -40,7 +40,7 @@ public sealed class JdRepository : IJdRepository
             {
                 var body = await response.Content.ReadAsStringAsync(cancellationToken);
                 _logger.LogWarning("JD GET addresses failed: {Status} {Body}", (int)response.StatusCode, body);
-                break;
+                throw new JdLookupFailedException($"addresses?page={page}", (int)response.StatusCode, body);
             }
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             var pagePayload = await JsonSerializer.DeserializeAsync<JdPagedResponse<JdAddress>>(stream, cancellationToken: cancellationToken)
@@ -58,9 +58,15 @@ public sealed class JdRepository : IJdRepository
 
     public async Task<(bool ok, int status, string message, JdAddress? returned)> CreateAddressAsync(JdAddress address, CancellationToken cancellationToken)
     {
-        using var content = new StringContent(JsonSerializer.Serialize(address), Encoding.UTF8, "application/json");
-        var request = new HttpRequestMessage(HttpMethod.Post, "api/addresses") { Content = content };
-        var response = await SendWithRetryAsync(() => request, cancellationToken);
+        // Pre-serialize once; allocate the request + content inside the lambda so each retry attempt
+        // gets a fresh HttpRequestMessage (and a fresh StringContent stream). HttpRequestMessage and
+        // HttpContent both throw "request message was already sent" / "content already read" on the
+        // second SendAsync if reused.
+        var payload = JsonSerializer.Serialize(address);
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, "api/addresses")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        }, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
             return (false, (int)response.StatusCode, body, null);
@@ -70,9 +76,11 @@ public sealed class JdRepository : IJdRepository
 
     public async Task<(bool ok, int status, string message)> UpdateAddressAsync(long id, JdAddress address, CancellationToken cancellationToken)
     {
-        using var content = new StringContent(JsonSerializer.Serialize(address), Encoding.UTF8, "application/json");
-        var request = new HttpRequestMessage(HttpMethod.Put, $"api/addresses/{id}") { Content = content };
-        var response = await SendWithRetryAsync(() => request, cancellationToken);
+        var payload = JsonSerializer.Serialize(address);
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Put, $"api/addresses/{id}")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        }, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
             return (false, (int)response.StatusCode, body);
@@ -83,11 +91,11 @@ public sealed class JdRepository : IJdRepository
     {
         var results = new List<JdCatalogItem>();
         var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/catalog"), cancellationToken);
-            if (!response.IsSuccessStatusCode)
-            {
-                var body = await response.Content.ReadAsStringAsync(cancellationToken);
-                _logger.LogWarning("JD GET catalog items failed: {Status} {Body}", (int)response.StatusCode, body);
-            return Enumerable.Empty<JdCatalogItem>().ToList();
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning("JD GET catalog items failed: {Status} {Body}", (int)response.StatusCode, body);
+            throw new JdLookupFailedException("catalog", (int)response.StatusCode, body);
         }
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var pagePayload = await JsonSerializer.DeserializeAsync<IEnumerable<JdCatalogItem>>(stream, cancellationToken: cancellationToken)
@@ -98,9 +106,11 @@ public sealed class JdRepository : IJdRepository
 
     public async Task<(bool ok, int status, string message, JdCatalogItem? returned)> CreateCatalogItemAsync(JdCatalogItem item, CancellationToken cancellationToken)
     {
-        using var content = new StringContent(JsonSerializer.Serialize(item), Encoding.UTF8, "application/json");
-        var request = new HttpRequestMessage(HttpMethod.Post, "api/catalog") { Content = content };
-        var response = await SendWithRetryAsync(() => request, cancellationToken);
+        var payload = JsonSerializer.Serialize(item);
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, "api/catalog")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        }, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
             return (false, (int)response.StatusCode, body, null);
@@ -110,9 +120,11 @@ public sealed class JdRepository : IJdRepository
 
     public async Task<(bool ok, int status, string message)> UpdateCatalogItemAsync(long id, JdCatalogItem item, CancellationToken cancellationToken)
     {
-        using var content = new StringContent(JsonSerializer.Serialize(item), Encoding.UTF8, "application/json");
-        var request = new HttpRequestMessage(HttpMethod.Put, $"api/catalog/{id}") { Content = content };
-        var response = await SendWithRetryAsync(() => request, cancellationToken);
+        var payload = JsonSerializer.Serialize(item);
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Put, $"api/catalog/{id}")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        }, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
             return (false, (int)response.StatusCode, body);
@@ -166,9 +178,11 @@ public sealed class JdRepository : IJdRepository
 
     public async Task<(bool ok, int status, string message, JdIncomingShipment? returned)> UpsertIncomingShipmentAsync(JdIncomingShipmentCreate payload, CancellationToken cancellationToken)
     {
-        using var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-        var request = new HttpRequestMessage(HttpMethod.Post, "api/incomingshipments") { Content = content };
-        var response = await SendWithRetryAsync(() => request, cancellationToken);
+        var json = JsonSerializer.Serialize(payload);
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, "api/incomingshipments")
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        }, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
@@ -183,9 +197,25 @@ public sealed class JdRepository : IJdRepository
     {
         var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/containertypes"), cancellationToken);
         if (!response.IsSuccessStatusCode)
-            return Array.Empty<JdContainerType>();
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning("JD GET containertypes failed: {Status} {Body}", (int)response.StatusCode, body);
+            throw new JdLookupFailedException("containertypes", (int)response.StatusCode, body);
+        }
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var data = await JsonSerializer.DeserializeAsync<List<JdContainerType>>(stream, cancellationToken: cancellationToken) ?? new List<JdContainerType>();
+
+        // Defensive: a 200 OK with an empty list during a JD-side degradation would otherwise be
+        // cached as truth for a full TTL window and silently block any purchase-order sync that
+        // relies on container type lookup. Treat empty like a transient failure so JdReadCache
+        // serves the last good value instead. See the inventories sibling below for the canonical
+        // version of this argument.
+        if (data.Count == 0)
+        {
+            _logger.LogWarning("JD GET containertypes returned 200 OK but empty list — treating as transient failure");
+            throw new JdLookupFailedException("containertypes", 200, "Empty container types list");
+        }
+
         return data;
     }
 
@@ -193,9 +223,28 @@ public sealed class JdRepository : IJdRepository
     {
         var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/inventories"), cancellationToken);
         if (!response.IsSuccessStatusCode)
-            return Array.Empty<JdInventory>();
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning("JD GET inventories failed: {Status} {Body}", (int)response.StatusCode, body);
+            throw new JdLookupFailedException("inventories", (int)response.StatusCode, body);
+        }
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var data = await JsonSerializer.DeserializeAsync<List<JdInventory>>(stream, cancellationToken: cancellationToken) ?? new List<JdInventory>();
+
+        // Closes the 2026-05-27 cache-poisoning hole: PR #2 stopped JdReadCache from storing empty
+        // lists when the loader threw, but a 200 OK with an empty array still bypassed it. JD's
+        // inventories endpoint has been observed returning an empty body during a JD-side
+        // degradation while simultaneously rejecting orders with "doesn't have any inventory items"
+        // — both are symptoms of the same upstream state, and 30-min dead windows for sales-sync
+        // followed. Treating empty like a non-success status forces JdReadCache down the
+        // stale-on-failure path (serve previous list + emit JD_LOOKUP_FAILED via
+        // LoadWithFailureLoggingAsync) instead of poisoning the cache for a full TTL.
+        if (data.Count == 0)
+        {
+            _logger.LogWarning("JD GET inventories returned 200 OK but empty list — treating as transient failure");
+            throw new JdLookupFailedException("inventories", 200, "Empty inventories list");
+        }
+
         return data;
     }
 
@@ -225,17 +274,15 @@ public sealed class JdRepository : IJdRepository
 
     public async Task<(bool ok, int status, string message, JdRequestOrder? returned)> CreateRequestOrderAsync(long inventoryId, JdRequestOrderCreate payload, CancellationToken cancellationToken)
     {
-        //payload.productItems.ForEach(i => i.catalog.sku = "TESTSKU");
-        
         // Check if date is in the past and adjust if necessary
         if(payload.date < DateTime.UtcNow)
             payload.date = DateTime.UtcNow;
 
         var jsonPayload = JsonSerializer.Serialize(payload);
-        
-        using var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
-        var request = new HttpRequestMessage(HttpMethod.Post, $"api/inventories/{inventoryId}/requestorders") { Content = content };
-        var response = await SendWithRetryAsync(() => request, cancellationToken);
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, $"api/inventories/{inventoryId}/requestorders")
+        {
+            Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json")
+        }, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
             return (false, (int)response.StatusCode, body, null);
@@ -245,8 +292,7 @@ public sealed class JdRepository : IJdRepository
 
     public async Task<(bool ok, int status, string message)> DeleteRequestOrderAsync(long inventoryId, long requestOrderId, CancellationToken cancellationToken)
     {
-        var request = new HttpRequestMessage(HttpMethod.Delete, $"api/inventories/{inventoryId}/requestorders/{requestOrderId}");
-        var response = await SendWithRetryAsync(() => request, cancellationToken);
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Delete, $"api/inventories/{inventoryId}/requestorders/{requestOrderId}"), cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
@@ -292,9 +338,13 @@ public sealed class JdRepository : IJdRepository
     public async Task<(bool ok, int status, string message, JdFileResponse? returned)> CreateFileAsync(JdFileCreate file, CancellationToken cancellationToken)
     {
         var payload = JsonSerializer.Serialize(file);
-        var content = new StringContent(payload, Encoding.UTF8, "application/json");
 
-        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, "api/files") { Content = content }, cancellationToken);
+        // StringContent must be allocated inside the lambda — its underlying stream is consumed by
+        // the first SendAsync and the second attempt would otherwise read from an empty stream.
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, "api/files")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        }, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         
         if (!response.IsSuccessStatusCode)
@@ -329,6 +379,14 @@ public sealed class JdRepository : IJdRepository
         }
 
         return (true, (int)response.StatusCode, "File verified successfully");
+    }
+
+    public async Task<(int status, string body)> GetRawAsync(string relativePath, CancellationToken cancellationToken)
+    {
+        var path = relativePath.TrimStart('/');
+        var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, path), cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        return ((int)response.StatusCode, body);
     }
 }
 

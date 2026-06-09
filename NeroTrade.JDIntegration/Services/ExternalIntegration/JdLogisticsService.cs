@@ -2,11 +2,14 @@ namespace NeroTrade.JDIntegration.Services.ExternalIntegration;
 
 using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Models.ExternalIntegration;
+using NeroTrade.JDIntegration.Services.Logging;
 using Repositories;
 
 public sealed class JdLogisticsService(
     IJdRepository repository,
     JdReadCache cache,
+    IIntegrationLogger integrationLogger,
+    SupabaseOptions supabaseOptions,
     ILogger<JdLogisticsService> logger)
     : IJdLogisticsService
 {
@@ -16,6 +19,45 @@ public sealed class JdLogisticsService(
     private IReadOnlyList<JdContainerType>? _containerTypes;
 
     /// <summary>
+    /// Wraps a cached JD lookup so a refresh failure becomes visible in <c>integration_logs</c>
+    /// (Hermes/dashboards can then see "JD was down between X and Y") and the exception still
+    /// propagates so <see cref="JdReadCache"/> can serve stale or short-circuit accordingly.
+    /// Fires once per refresh attempt — never per tick — because the cache only invokes the loader
+    /// on TTL expiry / backoff expiry, not on every cache hit.
+    /// </summary>
+    private async Task<TResult> LoadWithFailureLoggingAsync<TResult>(
+        string endpoint,
+        Func<Task<TResult>> load,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await load();
+        }
+        catch (JdLookupFailedException ex)
+        {
+            // CorrelationId is fresh per refresh — the loader runs inside the cache and may be
+            // serving N concurrent function invocations; there is no single "invocation" to tie to.
+            // The error_code is what Hermes/dashboards filter on.
+            await integrationLogger.LogAsync(new IntegrationLogEntry(
+                supabaseOptions.IntegrationName,
+                "warning",
+                "JD",
+                null,
+                $"JD GET {endpoint} failed (status {ex.StatusCode}). Cache will serve the last successful value if available.",
+                null,
+                null)
+            {
+                CorrelationId = Guid.NewGuid(),
+                ErrorCode = "JD_LOOKUP_FAILED",
+                Retryable = true,
+                SuggestedAction = "Transient JD-side failure; cache will retry on its own backoff. Investigate if it persists across multiple ticks."
+            }, cancellationToken);
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Upsert addresses to JD.
     /// </summary>
     /// <param name="addresses">Addresses to upsert.</param>
@@ -23,7 +65,9 @@ public sealed class JdLogisticsService(
     /// <returns>Upsert result.</returns>
     public async Task<UpsertResult<JdAddress>> UpsertAddressesAsync(IEnumerable<JdAddress> addresses, CancellationToken cancellationToken)
     {
-        _existingByAtt = await cache.GetAddressesByAttAsync(() => repository.GetAddressesAsync(cancellationToken), cancellationToken);
+        _existingByAtt = await cache.GetAddressesByAttAsync(
+            () => LoadWithFailureLoggingAsync("addresses", () => repository.GetAddressesAsync(cancellationToken), cancellationToken),
+            cancellationToken);
 
         var result = new UpsertResult<JdAddress>();
         foreach (var address in addresses)
@@ -45,6 +89,7 @@ public sealed class JdLogisticsService(
                 if (created.ok)
                 {
                     result.SuccessCount++;
+                    result.CreatedItems.Add(address);
                     if (created.returned?.att != null) _existingByAtt[created.returned.att] = created.returned;
                 }
                 else
@@ -64,7 +109,9 @@ public sealed class JdLogisticsService(
     /// <returns>Upsert result.</returns>
     public async Task<UpsertResult<JdCatalogItem>> UpsertItemsAsync(IEnumerable<JdCatalogItem> items, CancellationToken cancellationToken)
     {
-        _existingItemsBySku = await cache.GetItemsBySkuAsync(() => repository.GetCatalogItemsAsync(cancellationToken), cancellationToken);
+        _existingItemsBySku = await cache.GetItemsBySkuAsync(
+            () => LoadWithFailureLoggingAsync("catalog", () => repository.GetCatalogItemsAsync(cancellationToken), cancellationToken),
+            cancellationToken);
 
         var result = new UpsertResult<JdCatalogItem>();
         foreach (var item in items)
@@ -87,6 +134,7 @@ public sealed class JdLogisticsService(
                 if (created.ok)
                 {
                     result.SuccessCount++;
+                    result.CreatedItems.Add(item);
                     if (created.returned?.id != null) _existingItemsBySku[item.sku] = created.returned;
                 }
                 else
@@ -101,8 +149,12 @@ public sealed class JdLogisticsService(
     // Incoming shipments (purchase orders)
     public async Task<CreateResult<JdIncomingShipmentCreate>> CreateIncomingShipmentsAsync(IEnumerable<JdIncomingShipmentCreate> shipments, CancellationToken cancellationToken)
     {
-        _existingItemsBySku = await cache.GetItemsBySkuAsync(() => repository.GetCatalogItemsAsync(cancellationToken), cancellationToken);
-        _containerTypes = await cache.GetContainerTypesAsync(() => repository.GetContainerTypesAsync(cancellationToken), cancellationToken);
+        _existingItemsBySku = await cache.GetItemsBySkuAsync(
+            () => LoadWithFailureLoggingAsync("catalog", () => repository.GetCatalogItemsAsync(cancellationToken), cancellationToken),
+            cancellationToken);
+        _containerTypes = await cache.GetContainerTypesAsync(
+            () => LoadWithFailureLoggingAsync("containertypes", () => repository.GetContainerTypesAsync(cancellationToken), cancellationToken),
+            cancellationToken);
 
         // JD has no external-id lookup for incoming shipments, so we dedupe on the "PO {n}" text we set.
         // Fetch all statuses (not just approved) so a shipment that exists but is still a draft is also
@@ -132,7 +184,22 @@ public sealed class JdLogisticsService(
                 continue;
             }
 
-            await AttemptToResolveCatalogItemsAsync(shipment, cancellationToken);
+            // JD matches an incoming-shipment line to a catalog item ONLY via catalog.id. If we
+            // cannot resolve a line's SKU to a real catalog id we must NOT send it: JD would
+            // register the line as "Ukendt" and the warehouse would not know what it received.
+            // Fail the whole shipment so the caller parks the PO for manual handling with the SKUs.
+            var unresolvedSkus = ResolveCatalogItems(shipment);
+            if (unresolvedSkus.Count > 0)
+            {
+                var skuList = string.Join(", ", unresolvedSkus);
+                _logger.LogWarning(
+                    "Incoming shipment '{Text}' has {Count} line(s) with no matching JD catalog item: {Skus}",
+                    shipment.text, unresolvedSkus.Count, skuList);
+                result.Failures.Add(new UpsertFailure<JdIncomingShipmentCreate>(shipment, 0,
+                    $"No matching JD catalog item for SKU(s): {skuList}. The item must exist in JD's catalog (synced via SyncItemsToJd) before this purchase order can be received."));
+                continue;
+            }
+
             await SetContainerTypesAsync(shipment, cancellationToken);
 
             var upsert = await repository.UpsertIncomingShipmentAsync(shipment, cancellationToken);
@@ -165,7 +232,9 @@ public sealed class JdLogisticsService(
     }
 
     public Task<IReadOnlyList<JdInventory>> GetInventoriesAsync(CancellationToken cancellationToken)
-        => repository.GetInventoriesAsync(cancellationToken);
+        => cache.GetInventoriesAsync(
+            () => LoadWithFailureLoggingAsync("inventories", () => repository.GetInventoriesAsync(cancellationToken), cancellationToken),
+            cancellationToken);
 
     public Task<IReadOnlyList<JdRequestOrder>> GetRequestOrdersAsync(long inventoryId, CancellationToken cancellationToken)
         => repository.GetRequestOrdersAsync(inventoryId, cancellationToken);
@@ -373,22 +442,32 @@ public sealed class JdLogisticsService(
         return false;
     }
 
-    private async Task AttemptToResolveCatalogItemsAsync(JdIncomingShipmentCreate shipment, CancellationToken cancellationToken)
+    /// <summary>
+    /// Resolves each line's catalog reference (<c>catalog.id</c>) against JD's catalog by SKU —
+    /// the only identifier JD uses to match a line to a catalog item. Returns the SKUs of any
+    /// lines that could not be matched so the caller can fail the shipment instead of silently
+    /// sending a line JD would register as "Ukendt".
+    /// </summary>
+    private List<string> ResolveCatalogItems(JdIncomingShipmentCreate shipment)
     {
-        if (shipment.lines.Count == 0) return;
+        var unresolved = new List<string>();
         foreach (var line in shipment.lines)
         {
-            // Use Sku for lookup if available, otherwise try externalIdentification (fallback)
-            var skuToLookup = !string.IsNullOrWhiteSpace(line.Sku) ? line.Sku : line.externalIdentification;
+            // Use Sku for lookup if available, otherwise try externalIdentification (fallback).
+            // Trim to match the catalog cache, which is keyed on the trimmed SKU (see ItemMapper).
+            var skuToLookup = (!string.IsNullOrWhiteSpace(line.Sku) ? line.Sku : line.externalIdentification)?.Trim();
 
-            if (string.IsNullOrWhiteSpace(skuToLookup)) continue;
-
-            if (_existingItemsBySku.TryGetValue(skuToLookup, out var item) && item.id.HasValue)
+            if (!string.IsNullOrWhiteSpace(skuToLookup)
+                && _existingItemsBySku!.TryGetValue(skuToLookup, out var item)
+                && item.id.HasValue)
             {
                 line.catalog = new JdIncomingShipmentCatalogRef { id = item.id.Value };
                 continue;
             }
+
+            unresolved.Add(string.IsNullOrWhiteSpace(line.Sku) ? "(missing SKU)" : line.Sku);
         }
+        return unresolved;
     }
 
     private async Task SetContainerTypesAsync(JdIncomingShipmentCreate shipment, CancellationToken cancellationToken)

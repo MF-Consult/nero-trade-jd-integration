@@ -29,12 +29,19 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: 'Resolve Project Dependencies Using Dotnet'
+      - name: 'Run unit tests'
+        # Run the test project before publishing so a regression in the cache / repository / classifier
+        # contract blocks deploy rather than getting noticed in prod next time JD hiccups.
+        shell: bash
+        run: dotnet test NeroTrade.JDIntegration.Tests/NeroTrade.JDIntegration.Tests.csproj --configuration Release --verbosity normal
+
+      - name: 'Build Azure Functions project'
         shell: bash
         run: |
-          pushd './${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}'
-          dotnet build --configuration Release --output ./output
-          popd
+          # Build the function project specifically (not the .sln) so the deploy package doesn't
+          # accidentally include the test assemblies. Matches the original `dotnet build` semantics
+          # the deploy step was wired against.
+          dotnet build NeroTrade.JDIntegration/NeroTrade.JDIntegration.csproj --configuration Release --output ./output
       
       - name: Login to Azure
         uses: azure/login@v2

@@ -1,5 +1,5 @@
+using System.Text.Json;
 using Microsoft.Azure.Functions.Worker;
-using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Models.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
@@ -7,44 +7,43 @@ using NeroTrade.JDIntegration.Services.Logging;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
-using NeroTrade.JDIntegration.Services.UnicontaHandler.Models;
-using System.Text.Json;
+
+namespace NeroTrade.JDIntegration.Functions;
 
 public sealed class SyncPurchaseOrdersToJd(
     IUnicontaService uniconta,
     PurchaseOrderMapper mapper,
     IJdLogisticsService jd,
     IIntegrationLogger integrationLogger,
-    SupabaseOptions supabaseOptions,
     ILogger<SyncPurchaseOrdersToJd> logger)
 {
     [Function("SyncPurchaseOrdersToJd")]
     public async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo timer)
     {
-        var correlationId = Guid.NewGuid().ToString("N");
-        using var cts = new CancellationTokenSource();
-        using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
+        await using var run = integrationLogger.BeginRun("SyncPurchaseOrdersToJd");
+        var logScope = run.Scope;
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });
         logger.LogInformation("SyncPurchaseOrdersToJd started");
 
         try
         {
             var batch = new List<JdIncomingShipmentCreate>(capacity: 200);
             int totalProcessed = 0, totalSucceeded = 0, totalFailed = 0;
-            await foreach (var po in uniconta.ReadPurchaseOrdersBatchedAsync(200, cts.Token))
+            await foreach (var po in uniconta.ReadPurchaseOrdersBatchedAsync(200, cancellationToken))
             {
                 var payload = mapper.Map(po);
                 payload.text = $"PO {po.PurchaseNumber}";
                 batch.Add(payload);
                 if (batch.Count >= 200)
                 {
-                    var (p, s, f) = await HandleBatchAsync(batch, cts.Token);
+                    var (p, s, f) = await HandleBatchAsync(batch, logScope, cancellationToken);
                     totalProcessed += p; totalSucceeded += s; totalFailed += f;
                     batch.Clear();
                 }
             }
             if (batch.Count > 0)
             {
-                var (p, s, f) = await HandleBatchAsync(batch, cts.Token);
+                var (p, s, f) = await HandleBatchAsync(batch, logScope, cancellationToken);
                 totalProcessed += p; totalSucceeded += s; totalFailed += f;
                 batch.Clear();
             }
@@ -53,26 +52,18 @@ public sealed class SyncPurchaseOrdersToJd(
 
             if (totalProcessed > 0)
             {
-                await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "info", "Integration", null,
-                    $"SyncPurchaseOrdersToJd completed: {totalSucceeded} succeeded, {totalFailed} failed.",
-                    null,
-                    JsonSerializer.SerializeToElement(new { processed = totalProcessed, succeeded = totalSucceeded, failed = totalFailed })
-                ), cts.Token);
+                run.AttachCompletionPayload(new { processed = totalProcessed, succeeded = totalSucceeded, failed = totalFailed });
             }
         }
         catch (Exception ex)
         {
+            run.MarkFailed(ex);
             logger.LogError(ex, "SyncPurchaseOrdersToJd failed");
-            await integrationLogger.LogAsync(new IntegrationLogEntry(
-                supabaseOptions.IntegrationName, "error", "Integration", null,
-                $"SyncPurchaseOrdersToJd run failed: {ex.Message}", ex.ToString(), null
-            ), CancellationToken.None);
             throw;
         }
     }
 
-    private async Task<(int processed, int succeeded, int failed)> HandleBatchAsync(List<JdIncomingShipmentCreate> batch, CancellationToken ct)
+    private async Task<(int processed, int succeeded, int failed)> HandleBatchAsync(List<JdIncomingShipmentCreate> batch, IntegrationLogScope logScope, CancellationToken ct)
     {
         var result = await jd.CreateIncomingShipmentsAsync(batch, ct);
         if (result.Failures.Count > 0)
@@ -95,16 +86,30 @@ public sealed class SyncPurchaseOrdersToJd(
             {
                 markedCreated++;
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "info", "Integration", item.SourcePurchaseNumber.Value.ToString(),
-                    $"Purchase order {item.SourcePurchaseNumber} synced to JD.", null, null), ct);
+                    integrationLogger.IntegrationName, "info", "Integration", item.SourcePurchaseNumber.Value.ToString(),
+                    $"Purchase order {item.SourcePurchaseNumber} synced to JD.", null, null)
+                {
+                    CorrelationId = logScope.CorrelationId
+                }, ct);
+                await integrationLogger.MarkResolvedAsync(
+                    integrationLogger.IntegrationName,
+                    item.SourcePurchaseNumber.Value.ToString(),
+                    logScope.CorrelationId,
+                    ct);
             }
             else
             {
                 logger.LogError("Failed to set PO {Po} status to Oprettet in Uniconta", item.SourcePurchaseNumber.Value);
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "warning", "Uniconta", item.SourcePurchaseNumber.Value.ToString(),
+                    integrationLogger.IntegrationName, "warning", "Uniconta", item.SourcePurchaseNumber.Value.ToString(),
                     $"Purchase order {item.SourcePurchaseNumber} was sent to JD but the Uniconta status update failed; will retry next run.",
-                    null, null), ct);
+                    null, null)
+                {
+                    CorrelationId = logScope.CorrelationId,
+                    ErrorCode = "UNICONTA_CRUD_FAILED",
+                    Retryable = true,
+                    SuggestedAction = "Auto-recovers on next tick; if persistent, retry PO via /admin/retry-purchase-order."
+                }, ct);
             }
         }
 
@@ -123,9 +128,15 @@ public sealed class SyncPurchaseOrdersToJd(
             else logger.LogError("Failed to set PO {Po} status to Manuel handling in Uniconta", failure.Item.SourcePurchaseNumber.Value);
 
             await integrationLogger.LogAsync(new IntegrationLogEntry(
-                supabaseOptions.IntegrationName, "error", "JD", failure.Item.SourcePurchaseNumber.Value.ToString(),
-                $"JD rejected purchase order {failure.Item.SourcePurchaseNumber}: {failure.Message}", null,
-                JsonSerializer.SerializeToElement(new { errorMessage = failure.Message, sourcePurchaseNumber = failure.Item.SourcePurchaseNumber })), ct);
+                integrationLogger.IntegrationName, "error", "JD", failure.Item.SourcePurchaseNumber.Value.ToString(),
+                $"JD rejected purchase order {failure.Item.SourcePurchaseNumber}: {LogSanitizer.Sanitize(failure.Message)}", null,
+                JsonSerializer.SerializeToElement(new { errorMessage = failure.Message, sourcePurchaseNumber = failure.Item.SourcePurchaseNumber }))
+            {
+                CorrelationId = logScope.CorrelationId,
+                ErrorCode = "JD_VALIDATION_REJECTED",
+                Retryable = false,
+                SuggestedAction = "Manual review — PO marked Manuel handling in Uniconta with the JD reject reason."
+            }, ct);
         }
 
         logger.LogInformation("JD incoming shipments batch: created_or_exists={Created} marked_oprettet={MarkedCreated} failures={Failures} marked_manuel={MarkedManual}",

@@ -9,22 +9,21 @@ using System.Text.Json;
 
 namespace NeroTrade.JDIntegration.Functions;
 
-public class SyncReceivedQuantityToUniconta(
+public sealed class SyncReceivedQuantityToUniconta(
     IJdLogisticsService jd,
     IUnicontaService uniconta,
     IIntegrationLogger integrationLogger,
-    SupabaseOptions supabaseOptions,
     ILogger<SyncReceivedQuantityToUniconta> logger)
 {
     [Function("SyncReceivedQuantityToUniconta")]
-    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer)
+    public async Task RunAsync([TimerTrigger("0 */15 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
-        var correlationId = Guid.NewGuid().ToString("N");
-        using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId });
+        await using var run = integrationLogger.BeginRun("SyncReceivedQuantityToUniconta");
+        var logScope = run.Scope;
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });
         logger.LogInformation("SyncReceivedQuantityToUniconta started");
 
-        using var cts = new CancellationTokenSource();
-        var token = cts.Token;
+        var token = cancellationToken;
 
         try
         {
@@ -33,7 +32,7 @@ public class SyncReceivedQuantityToUniconta(
             var allShipments = await jd.GetIncomingShipmentsAsync(token);
 
             // Filter for completed shipments (Status = 1) and modified within last 24h.
-            // The function runs every 5 minutes; a 24h window gives ample overlap so nothing is missed.
+            // The function runs every 15 minutes; a 24h window gives ample overlap so nothing is missed.
             var cutoffTime = DateTime.UtcNow.AddDays(-1);
             var relevantShipments = allShipments
                 .Where(s => s.status == 1 && s.modifiedOn >= cutoffTime)
@@ -71,8 +70,15 @@ public class SyncReceivedQuantityToUniconta(
                     logger.LogWarning("Could not fetch details for shipment {Id}", summary.id);
                     errorCount++;
                     await integrationLogger.LogAsync(new IntegrationLogEntry(
-                        supabaseOptions.IntegrationName, "error", "JD", purchaseNumber.ToString(),
-                        $"Could not fetch incoming shipment {summary.id} details from JD (PO {purchaseNumber}).", null, null), token);
+                        integrationLogger.IntegrationName, "error", "JD", purchaseNumber.ToString(),
+                        $"Could not fetch incoming shipment {summary.id} details from JD (PO {purchaseNumber}).", null,
+                        JsonSerializer.SerializeToElement(new { shipmentId = summary.id, purchaseNumber }))
+                    {
+                        CorrelationId = logScope.CorrelationId,
+                        ErrorCode = "JD_LOOKUP_MISS",
+                        Retryable = true,
+                        SuggestedAction = "Auto-recovers on next tick (15 min); if persistent, the shipment may have been deleted in JD."
+                    }, token);
                     continue;
                 }
 
@@ -99,9 +105,15 @@ public class SyncReceivedQuantityToUniconta(
                         logger.LogError("Failed to sync line {Sku} for PO {Po}", sku, purchaseNumber);
                         errorCount++;
                         await integrationLogger.LogAsync(new IntegrationLogEntry(
-                            supabaseOptions.IntegrationName, "error", "Uniconta", purchaseNumber.ToString(),
+                            integrationLogger.IntegrationName, "error", "Uniconta", purchaseNumber.ToString(),
                             $"Failed to update received quantity for SKU {sku} on PO {purchaseNumber}.", null,
-                            JsonSerializer.SerializeToElement(new { sku, purchaseNumber })), token);
+                            JsonSerializer.SerializeToElement(new { sku, purchaseNumber, receivedQty }))
+                        {
+                            CorrelationId = logScope.CorrelationId,
+                            ErrorCode = "UNICONTA_CRUD_FAILED",
+                            Retryable = true,
+                            SuggestedAction = "Auto-recovers on next tick (15 min); if persistent, call /admin/requeue-shipment for the source shipment."
+                        }, token);
                     }
                     else
                     {
@@ -113,8 +125,16 @@ public class SyncReceivedQuantityToUniconta(
                 {
                     updatedCount++;
                     await integrationLogger.LogAsync(new IntegrationLogEntry(
-                        supabaseOptions.IntegrationName, "info", "Integration", purchaseNumber.ToString(),
-                        $"Received quantities for PO {purchaseNumber} registered from JD.", null, null), token);
+                        integrationLogger.IntegrationName, "info", "Integration", purchaseNumber.ToString(),
+                        $"Received quantities for PO {purchaseNumber} registered from JD.", null, null)
+                    {
+                        CorrelationId = logScope.CorrelationId
+                    }, token);
+                    await integrationLogger.MarkResolvedAsync(
+                        integrationLogger.IntegrationName,
+                        purchaseNumber.ToString(),
+                        logScope.CorrelationId,
+                        token);
                 }
             }
 
@@ -123,21 +143,13 @@ public class SyncReceivedQuantityToUniconta(
 
             if (relevantShipments.Count > 0)
             {
-                await integrationLogger.LogAsync(new IntegrationLogEntry(
-                    supabaseOptions.IntegrationName, "info", "Integration", null,
-                    $"SyncReceivedQuantityToUniconta completed: {updatedCount} POs updated, {errorCount} line errors, {skippedCount} shipments skipped.",
-                    null,
-                    JsonSerializer.SerializeToElement(new { processedPOs = updatedCount, lineErrors = errorCount, skippedShipments = skippedCount })
-                ), token);
+                run.AttachCompletionPayload(new { processed = updatedCount + errorCount + skippedCount, succeeded = updatedCount, failed = errorCount, skipped = skippedCount });
             }
         }
         catch (Exception ex)
         {
+            run.MarkFailed(ex);
             logger.LogError(ex, "Error during Received Quantity Sync");
-            await integrationLogger.LogAsync(new IntegrationLogEntry(
-                supabaseOptions.IntegrationName, "error", "Integration", null,
-                $"SyncReceivedQuantityToUniconta run failed: {ex.Message}", ex.ToString(), null
-            ), CancellationToken.None);
             throw;
         }
     }

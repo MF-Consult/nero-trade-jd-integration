@@ -98,11 +98,42 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         }
     }
 
+    // Server-side filter window. Any order whose UpdatedAt is within this many minutes will be
+    // returned by the eligibility query. Window must be wide enough that an order which fails JD
+    // validation and is re-clicked by the user still re-appears within the window. 30 min is
+    // generous — typical click-to-sync flow is sub-minute, and a Fejlet re-click bumps UpdatedAt
+    // server-side, so the window resets on user action.
+    private static readonly TimeSpan SalesOrderRecentWindow = TimeSpan.FromMinutes(30);
+
     public async IAsyncEnumerable<LocalSalesOrder> ReadAllSalesOrdersAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
 
-        var orders = await queryApi.Query<DebtorOrderClient>((IEnumerable<PropValuePair>?)null);
+        // Filter server-side on UpdatedAt rather than pulling every sales order and filtering in
+        // memory. Two reasons:
+        //   1. Smaller payload (only recently-touched rows), so the tick is faster and cheaper.
+        //   2. The unfiltered path in `QueryAPI.Query<T>(null)` opts into `SetCache=true` which
+        //      participates in the SDK's session-level cache machinery — observed (2026-05-27) to
+        //      return server-cached snapshots that miss recent UI-side edits. A filtered query
+        //      takes the simpler code path (SetCache=false) and re-asks the server each tick.
+        var cutoff = DateTime.UtcNow - SalesOrderRecentWindow;
+        var recentFilter = new[]
+        {
+            PropValuePair.GenereteWhereElements("UpdatedAt", cutoff, CompareOperator.GreaterThanOrEqual, typeof(DateTime))
+        };
+
+        var querySw = System.Diagnostics.Stopwatch.StartNew();
+        var orders = await queryApi.Query<DebtorOrderClient>(recentFilter);
+        querySw.Stop();
+
+        // Diagnostic: lets us separate "Uniconta returned 0 rows" from "Uniconta returned N rows
+        // but none passed the eligibility filter". App Insights only — not integration_logs — to
+        // keep noise low. If we suspect server-side staleness in the future, this is the row to
+        // check (raw count vs. eligible count vs. session healthy).
+        _logger.LogInformation(
+            "Uniconta Query<DebtorOrderClient> updated_since={Cutoff:o}: raw_count={Count} query_ms={QueryMs} session_logged_in={Logged}",
+            cutoff, orders?.Length ?? -1, querySw.ElapsedMilliseconds, queryApi.LoggedIn);
+
         // An empty Group means the order has not yet been pushed to JD; "Fejlet" means a previous push
         // failed and is parked until a user re-sets Xoverfor1. On success SyncSalesOrdersToJd sets Group =
         // "Oprettet", and SyncRequestOrderStatusToUniconta later replaces it with the live JD status —
@@ -128,6 +159,17 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
             .Where(i => !string.IsNullOrEmpty(i?.Item))
             .GroupBy(i => i!.Item!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => (int)g.First()._ItemType, StringComparer.OrdinalIgnoreCase);
+
+        // Bulk Master/Detail: one round-trip for ALL pending orders' lines instead of one per order.
+        // Previously this loop did `Query<DebtorOrderLineClient>(new List{o}, null)` per order which
+        // dominated the per-tick latency once more than a handful of orders were pending.
+        var allMasters = filteredOrders.Cast<UnicontaBaseEntity>().ToList();
+        var allLines = await queryApi.Query<DebtorOrderLineClient>(allMasters, null);
+        // DebtorOrderLineClient._OrderRowId is the FK back to DebtorOrderClient.RowId.
+        var linesByOrderRowId = (allLines ?? Enumerable.Empty<DebtorOrderLineClient>())
+            .Where(l => l != null)
+            .GroupBy(l => l.OrderRowId)
+            .ToDictionary(g => g.Key, g => g.ToList());
 
         foreach (var o in filteredOrders)
         {
@@ -167,25 +209,26 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 OurReference = o.OurRef,
             };
 
-            var masters = new List<UnicontaBaseEntity> { o };
-            var lines = await queryApi.Query<DebtorOrderLineClient>(masters, null);
-            foreach (var l in lines ?? Enumerable.Empty<DebtorOrderLineClient>())
+            if (linesByOrderRowId.TryGetValue(o.RowId, out var lines))
             {
-                int itemType = 0;
-                if (!string.IsNullOrEmpty(l._Item) && itemTypeBySku.TryGetValue(l._Item, out var cachedType))
+                foreach (var l in lines)
                 {
-                    itemType = cachedType;
-                }
+                    int itemType = 0;
+                    if (!string.IsNullOrEmpty(l._Item) && itemTypeBySku.TryGetValue(l._Item, out var cachedType))
+                    {
+                        itemType = cachedType;
+                    }
 
-                so.Lines.Add(new LocalSalesOrderLine
-                {
-                    Sku = l._Item,
-                    ItemName = l.Text,
-                    Quantity = l._Qty,
-                    Unit = l.Unit,
-                    Price = (decimal?)l.Price,
-                    ItemType = itemType
-                });
+                    so.Lines.Add(new LocalSalesOrderLine
+                    {
+                        Sku = l._Item,
+                        ItemName = l.Text,
+                        Quantity = l._Qty,
+                        Unit = l.Unit,
+                        Price = (decimal?)l.Price,
+                        ItemType = itemType
+                    });
+                }
             }
 
             yield return so;

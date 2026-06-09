@@ -32,6 +32,8 @@ public interface IJdRepository
     Task<(bool ok, int status, string message, JdFileResponse? returned)> CreateFileAsync(JdFileCreate file, CancellationToken cancellationToken);
     Task<(bool ok, int status, string message)> VerifyFileAsync(long fileId, CancellationToken cancellationToken);
 
+    // Diagnostic: raw JSON pass-through to Shipmondo endpoints for slug/product discovery.
+    Task<(int status, string body)> GetRawAsync(string relativePath, CancellationToken cancellationToken);
 }
 
 

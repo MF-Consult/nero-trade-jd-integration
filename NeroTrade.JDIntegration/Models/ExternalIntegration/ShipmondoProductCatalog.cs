@@ -24,6 +24,13 @@ public static class ShipmondoProductCatalog
                 ShipmondoServiceCodes.PalletExchange,
                 ShipmondoServiceCodes.TimedDelivery,
             },
+
+            // EGS Standard pallets — pallet replacement for Glimø on DK postal codes > 4999
+            // (Mikkel, 2026-05-15). Per JD only PL_EXCHANGE is in scope; TIMED_DELIVERY not confirmed.
+            ["EGS_STDPL"] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ShipmondoServiceCodes.PalletExchange,
+            },
         };
 
     public static bool SupportsService(string productCode, string serviceCode) =>
