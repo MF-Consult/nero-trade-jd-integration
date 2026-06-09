@@ -78,18 +78,22 @@ public class SyncRequestOrderStatusToUniconta
             int errorCount = 0;
             int skippedCount = 0;
 
-            foreach (var jdOrder in jdOrders)
+            // Collapse to the most recent JD order per Uniconta SO number. A cancelled order can linger
+            // in JD (it is excluded from outbound dedup but JD never hard-removes it) alongside a freshly
+            // created one sharing the same "SO {n}" reference. Iterating all of them would let whichever
+            // is processed last win — so Uniconta could be set to the stale cancelled order's status.
+            // Highest JD id = most recently created order, i.e. the one whose status is current.
+            var latestPerOrderNumber = jdOrders
+                .Where(o => o.status != null)
+                .Select(o => new { Order = o, OrderNumber = JdOrderHelper.GetOrderNumber(o.shopOrderId, o.text, o.deliveryNoteText) })
+                .Where(x => x.OrderNumber != 0)
+                .GroupBy(x => x.OrderNumber)
+                .Select(g => g.OrderByDescending(x => x.Order.id ?? 0).First());
+
+            foreach (var entry in latestPerOrderNumber)
             {
-                // Validate JD Order
-                if (jdOrder.status == null) continue;
-
-                int orderNumber = JdOrderHelper.GetOrderNumber(jdOrder.shopOrderId, jdOrder.text, jdOrder.deliveryNoteText);
-
-                if (orderNumber == 0)
-                {
-                    // Could not parse order number
-                    continue;
-                }
+                var jdOrder = entry.Order;
+                var orderNumber = entry.OrderNumber;
 
                 // Check if we have this order in Uniconta
                 if (!unicontaOrders.TryGetValue(orderNumber, out var currentGroup))
