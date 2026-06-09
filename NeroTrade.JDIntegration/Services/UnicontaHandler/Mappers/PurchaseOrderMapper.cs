@@ -13,8 +13,8 @@ public sealed class PurchaseOrderMapper
             text = $"PO {po.PurchaseNumber}",
             SourcePurchaseNumber = po.PurchaseNumber,
             carrier = "TBD",
-            notificationEmails = null,
-            disableApprovalEmail = true,
+            notificationEmails = "mb@nerotrade.dk",
+            disableApprovalEmail = false,
             files = []
         };
         foreach (var line in po.Lines)

@@ -31,7 +31,7 @@ public sealed class SyncSalesOrdersToJd(
     private static readonly SemaphoreSlim RunLock = new(1, 1);
 
     [Function("SyncSalesOrdersToJd")]
-    public async Task RunAsync([TimerTrigger("*/30 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    public async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo timer)
     {
         if (!await RunLock.WaitAsync(0, cancellationToken))
         {

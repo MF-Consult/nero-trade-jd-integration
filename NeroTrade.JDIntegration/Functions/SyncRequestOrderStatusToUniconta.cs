@@ -75,19 +75,22 @@ public sealed class SyncRequestOrderStatusToUniconta(
             int errorCount = 0;
             int skippedCount = 0;
 
-            // JD lets multiple request orders point back to the same Uniconta SO (via
-            // deliveryNoteText "SO {n}"). When duplicates exist, iterating naively makes
-            // Group flap each tick depending on JD's response order — see SO 2135 in prod.
-            // Group by resolved SO number and pick one winner deterministically.
-            var jdOrdersBySo = jdOrders
-                .Where(o => o.status.HasValue)
-                .Select(o => (orderNumber: JdOrderHelper.GetOrderNumber(o.shopOrderId, o.text, o.deliveryNoteText), jdOrder: o))
-                .Where(p => p.orderNumber != 0)
-                .GroupBy(p => p.orderNumber);
+            // Collapse to the most recent JD order per Uniconta SO number. A cancelled order can linger
+            // in JD (it is excluded from outbound dedup but JD never hard-removes it) alongside a freshly
+            // created one sharing the same "SO {n}" reference. Iterating all of them would let whichever
+            // is processed last win — so Uniconta could be set to the stale cancelled order's status.
+            // Highest JD id = most recently created order, i.e. the one whose status is current.
+            var latestPerOrderNumber = jdOrders
+                .Where(o => o.status != null)
+                .Select(o => new { Order = o, OrderNumber = JdOrderHelper.GetOrderNumber(o.shopOrderId, o.text, o.deliveryNoteText) })
+                .Where(x => x.OrderNumber != 0)
+                .GroupBy(x => x.OrderNumber)
+                .Select(g => g.OrderByDescending(x => x.Order.id ?? 0).First());
 
-            foreach (var soGroup in jdOrdersBySo)
+            foreach (var entry in latestPerOrderNumber)
             {
-                int orderNumber = soGroup.Key;
+                var jdOrder = entry.Order;
+                var orderNumber = entry.OrderNumber;
 
                 // Check if we have this order in Uniconta
                 if (!unicontaOrders.TryGetValue(orderNumber, out var currentGroup))

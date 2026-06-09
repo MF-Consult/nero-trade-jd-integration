@@ -239,11 +239,19 @@ public sealed class JdLogisticsService(
     public Task<IReadOnlyList<JdRequestOrder>> GetRequestOrdersAsync(long inventoryId, CancellationToken cancellationToken)
         => repository.GetRequestOrdersAsync(inventoryId, cancellationToken);
 
+    public Task<(bool ok, int status, string message)> DeleteRequestOrderAsync(long inventoryId, long requestOrderId, CancellationToken cancellationToken)
+        => repository.DeleteRequestOrderAsync(inventoryId, requestOrderId, cancellationToken);
+
     public async Task<UpsertResult<JdRequestOrderCreate>> UpsertRequestOrdersAsync(long inventoryId, IEnumerable<JdRequestOrderCreate> orders, CancellationToken cancellationToken)
     {
         // Build existing map keyed by shop order identifier (text first, then deliveryNoteText — the
         // "SO {n}" reference is written to deliveryNoteText on newer orders).
+        // Exclude cancelled (Annulleret) orders from the dedup map. JD does not hard-remove a cancelled
+        // request order (DELETE returns 204 but it lingers in the list), so a dead cancelled order must
+        // not match an incoming sales order — otherwise the re-upload is skipped, or tries to "recreate"
+        // the un-removable order. Treating cancelled as absent lets a fresh order be created.
         var existing = (await repository.GetRequestOrdersAsync(inventoryId, cancellationToken))
+            .Where(r => r.status != JdRequestOrderStatus.Cancelled)
             .Select(r => new { Order = r, Key = JdOrderHelper.GetOrderNumberString(r.shopOrderId, r.text, r.deliveryNoteText) })
             .Where(x => !string.IsNullOrWhiteSpace(x.Key))
             .GroupBy(x => x.Key!, StringComparer.OrdinalIgnoreCase)
