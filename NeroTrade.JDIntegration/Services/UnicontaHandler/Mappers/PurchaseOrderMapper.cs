@@ -9,10 +9,14 @@ public sealed class PurchaseOrderMapper
     {
         var create = new JdIncomingShipmentCreate
         {
-            date = DateTime.UtcNow.AddDays(2),
-            text = $"PO {po.PurchaseNumber}",
+            date = po.DeliveryDate ?? DateTime.UtcNow.AddDays(2),
+            // "PO {n}" is the machine key parsed back out via JdOrderHelper (dedup and
+            // received-quantity sync) — the remark may only ever be appended after it.
+            text = string.IsNullOrWhiteSpace(po.RemarkText)
+                ? $"PO {po.PurchaseNumber}"
+                : $"PO {po.PurchaseNumber} - {po.RemarkText.Trim()}",
             SourcePurchaseNumber = po.PurchaseNumber,
-            carrier = "TBD",
+            carrier = string.IsNullOrWhiteSpace(po.Carrier) ? "TBD" : po.Carrier!.Trim(),
             notificationEmails = "mb@nerotrade.dk",
             disableApprovalEmail = false,
             files = []

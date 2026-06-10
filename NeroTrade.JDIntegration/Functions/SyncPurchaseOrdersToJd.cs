@@ -32,7 +32,6 @@ public sealed class SyncPurchaseOrdersToJd(
             await foreach (var po in uniconta.ReadPurchaseOrdersBatchedAsync(200, cancellationToken))
             {
                 var payload = mapper.Map(po);
-                payload.text = $"PO {po.PurchaseNumber}";
                 batch.Add(payload);
                 if (batch.Count >= 200)
                 {

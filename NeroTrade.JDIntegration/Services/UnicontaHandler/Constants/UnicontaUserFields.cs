@@ -17,6 +17,10 @@ public static class UnicontaUserFields
     // Process-status field on the purchase order (a value-list user field).
     public const string PurchaseOrderJdStatus = "xJDStatus";
 
+    // Purchase order fields mapped onto the JD incoming shipment.
+    public const string PurchaseOrderCarrier = "xCarrier";
+    public const string PurchaseOrderRemark = "xRemarksForJD";
+
     // Free-text field where the integration writes the reason an order could not be pushed to JD.
     public const string IntegrationIssue = "xIntegrationIssue";
 

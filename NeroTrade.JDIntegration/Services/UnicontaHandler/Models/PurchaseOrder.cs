@@ -22,6 +22,7 @@ public sealed class LocalPurchaseOrder
     public string? TrackingNote { get; init; }
     public string? DeliveryNoteText { get; init; }
     public string? RemarkText { get; init; }
+    public string? Carrier { get; init; }
 
     // Shipmondo-related fields
     public string? TransportType { get; init; }

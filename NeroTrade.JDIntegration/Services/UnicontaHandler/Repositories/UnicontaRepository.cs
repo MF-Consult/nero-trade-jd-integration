@@ -77,6 +77,9 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 DeliveryZip = o._DeliveryZipCode,
                 DeliveryCity = o._DeliveryCity,
                 DeliveryCountryCode = o._DeliveryCountry == 0 ? "DK" : o._DeliveryCountry.ToString(),
+                DeliveryDate = o._DeliveryDate == default ? (DateTime?)null : o._DeliveryDate,
+                Carrier = o.GetUserField(UnicontaUserFields.PurchaseOrderCarrier) as string,
+                RemarkText = o.GetUserField(UnicontaUserFields.PurchaseOrderRemark) as string,
             };
 
             // Fetch detail lines using Master/Detail query to ensure lines are loaded
