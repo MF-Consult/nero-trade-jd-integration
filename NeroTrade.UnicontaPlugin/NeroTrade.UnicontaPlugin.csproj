@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+      Multi-targeted on purpose:
+      - net48  : the deliverable — the DLL loaded by the Uniconta desktop client (WPF, .NET Framework).
+      - net9.0 : the pure validation core only (no Uniconta types), so the test project can
+                 reference it and run on the linux CI runner. The plugin class itself is
+                 excluded from this target via #if NETFRAMEWORK.
+    -->
+    <PropertyGroup>
+        <TargetFrameworks>net48;net9.0</TargetFrameworks>
+        <LangVersion>latest</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <RootNamespace>NeroTrade.UnicontaPlugin</RootNamespace>
+        <AssemblyName>NeroTrade.UnicontaPlugin</AssemblyName>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+        <!-- Uniconta desktop client API: PageEventsBase, DebtorOrderClient, GetUserField extensions. -->
+        <PackageReference Include="Uniconta.WindowsAPI" Version="95.0.0.4" />
+        <!-- Lets the net48 target compile on non-Windows CI runners. -->
+        <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    </ItemGroup>
+
+</Project>
