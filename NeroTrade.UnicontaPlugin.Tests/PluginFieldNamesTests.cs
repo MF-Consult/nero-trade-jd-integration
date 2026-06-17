@@ -17,6 +17,13 @@ public class PluginFieldNamesTests
         Assert.Equal("xTrackingNote", PluginFieldNames.TrackingNote);
         Assert.Equal("xTransportTypes", PluginFieldNames.TransportType);
         Assert.Equal("xDeliveryType", PluginFieldNames.DeliveryType);
+        Assert.Equal("xByttepaller", PluginFieldNames.ExchangePallets);
+    }
+
+    [Fact]
+    public void ExchangePalletsValues_AreInTheConfiguredIndexOrder()
+    {
+        Assert.Equal(new[] { "Ja", "Nej" }, ExchangePalletsValues.InIndexOrder);
     }
 
     [Fact]

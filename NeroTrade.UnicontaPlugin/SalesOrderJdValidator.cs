@@ -7,7 +7,7 @@ namespace NeroTrade.UnicontaPlugin;
 public static class ValidationMessages
 {
     public const string DeliveryDateMissing =
-        "Udleveringsdato skal udfyldes ved overførsel til JD Logistik";
+        "Leveringsdato skal udfyldes ved overførsel til JD Logistik";
 
     public const string TrackingNoteMissing =
         "Sporingsnote (xTrackingNote) skal udfyldes ved overførsel til JD Logistik";
@@ -21,6 +21,9 @@ public static class ValidationMessages
     /// <summary>{0} = the chosen transport type.</summary>
     public const string DeliveryTypeMustBeEmptyFormat =
         "Leveringstype skal være tom når transporttype er '{0}'";
+
+    public const string ExchangePalletsRequired =
+        "Byttepaller (Ja/Nej) skal vælges ved overførsel til JD Logistik";
 }
 
 /// <summary>
@@ -44,7 +47,8 @@ public static class SalesOrderJdValidator
         DateTime deliveryDate,
         string? trackingNote,
         string? transportType,
-        string? deliveryType)
+        string? deliveryType,
+        string? exchangePallets)
     {
         if (!transferToJd)
             return null;
@@ -62,20 +66,30 @@ public static class SalesOrderJdValidator
         var hasDeliveryType = !string.IsNullOrWhiteSpace(deliveryType);
 
         if (Is(transport, TransportTypeValues.JdLogistik))
-            return hasDeliveryType ? null : ValidationMessages.DeliveryTypeRequiredForJdLogistik;
-
+        {
+            if (!hasDeliveryType)
+                return ValidationMessages.DeliveryTypeRequiredForJdLogistik;
+        }
         // xDeliveryType overrides the transport type in SalesOrderMapper, so a filled-in
         // delivery type on these transports would book the wrong carrier.
         // The message deliberately shows the canonical value-list name, never the raw input.
-        if (Is(transport, TransportTypeValues.Ekstern))
-            return hasDeliveryType
-                ? string.Format(ValidationMessages.DeliveryTypeMustBeEmptyFormat, TransportTypeValues.Ekstern)
-                : null;
+        else if (Is(transport, TransportTypeValues.Ekstern))
+        {
+            if (hasDeliveryType)
+                return string.Format(ValidationMessages.DeliveryTypeMustBeEmptyFormat, TransportTypeValues.Ekstern);
+        }
+        else if (Is(transport, TransportTypeValues.AfhenterSelv))
+        {
+            if (hasDeliveryType)
+                return string.Format(ValidationMessages.DeliveryTypeMustBeEmptyFormat, TransportTypeValues.AfhenterSelv);
+        }
+        // Unknown transport types impose no delivery-type constraint (pass through).
 
-        if (Is(transport, TransportTypeValues.AfhenterSelv))
-            return hasDeliveryType
-                ? string.Format(ValidationMessages.DeliveryTypeMustBeEmptyFormat, TransportTypeValues.AfhenterSelv)
-                : null;
+        // Byttepaller is a forced decision (Maiwand) — but only for pallet orders, the only case
+        // the integration can send PL_EXCHANGE for (see ExchangePalletsRules). For parcels / pickup
+        // the field is irrelevant, hidden, and not required. Checked last, after the transport rules.
+        if (ExchangePalletsRules.IsRelevant(transport, deliveryType) && string.IsNullOrWhiteSpace(exchangePallets))
+            return ValidationMessages.ExchangePalletsRequired;
 
         return null;
     }

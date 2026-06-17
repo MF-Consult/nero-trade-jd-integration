@@ -8,7 +8,7 @@
                  excluded from this target via #if NETFRAMEWORK.
     -->
     <PropertyGroup>
-        <TargetFrameworks>net48;net9.0</TargetFrameworks>
+        <TargetFrameworks>net4.8;net9.0</TargetFrameworks>
         <LangVersion>latest</LangVersion>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
@@ -16,11 +16,39 @@
         <AssemblyName>NeroTrade.UnicontaPlugin</AssemblyName>
     </PropertyGroup>
 
-    <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <!-- net4.8 only: the Uniconta client API is needed solely by the plugin class. The net9.0
+         target is the pure validation core (no Uniconta types) so the test project stays
+         cross-platform — do NOT add Uniconta.WindowsAPI to it. -->
+    <ItemGroup Condition="'$(TargetFramework)' == 'net4.8'">
         <!-- Uniconta desktop client API: PageEventsBase, DebtorOrderClient, GetUserField extensions. -->
         <PackageReference Include="Uniconta.WindowsAPI" Version="95.0.0.4" />
-        <!-- Lets the net48 target compile on non-Windows CI runners. -->
+        <!-- Lets the net4.8 target compile on non-Windows CI runners. -->
         <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     </ItemGroup>
+
+    <!--
+      Debug convenience for the local F5 loop: drop ONLY our DLL (+ .pdb, needed for breakpoints)
+      into the Uniconta PluginPath, so the desktop client loads the fresh build on next launch.
+      Deliberately scoped to net4.8 + Debug + Windows:
+        - net4.8 only  : the net9.0 target is the pure test core, never loaded by the client.
+        - Debug only   : Release output is what you upload as a Partner Plugin, not local dev.
+        - Windows only : never run on the linux PR runner (C:\Uniconta\PluginPath does not exist).
+      We copy our two files explicitly — the co-located Uniconta.*.dll must NOT enter PluginPath
+      (the client ships its own; a duplicate breaks plugin load). Override with
+      -p:UnicontaPluginPath=...  to point at a custom path.
+    -->
+    <PropertyGroup>
+        <UnicontaPluginPath Condition="'$(UnicontaPluginPath)' == ''">C:\Uniconta\PluginPath</UnicontaPluginPath>
+    </PropertyGroup>
+
+    <Target Name="CopyToUnicontaPluginPath" AfterTargets="Build" Condition="'$(TargetFramework)' == 'net4.8' AND '$(Configuration)' == 'Debug' AND '$(OS)' == 'Windows_NT'">
+        <MakeDir Directories="$(UnicontaPluginPath)" />
+        <!-- ContinueOnError: a running Uniconta client holds a lock on the loaded plugin DLL. A
+             loaded .NET assembly cannot be hot-swapped, so a lock just means "close the client and
+             rebuild" — it must degrade to a warning, never fail the compile (which would block F5). -->
+        <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(UnicontaPluginPath)" ContinueOnError="true" Retries="0" />
+        <Copy SourceFiles="$(TargetDir)$(AssemblyName).pdb" DestinationFolder="$(UnicontaPluginPath)" Condition="Exists('$(TargetDir)$(AssemblyName).pdb')" ContinueOnError="true" Retries="0" />
+        <Message Importance="high" Text="Plugin built. Copy target -> $(UnicontaPluginPath). If a copy warning appeared above, the Uniconta client is open and holds the old DLL — close it and rebuild to load this version." />
+    </Target>
 
 </Project>
