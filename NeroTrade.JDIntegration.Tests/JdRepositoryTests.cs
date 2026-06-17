@@ -87,10 +87,39 @@ public class JdRepositoryTests
         Assert.Equal("Stk", result[0].name);
     }
 
-    private static JdRepository BuildRepo(HttpMessageHandler handler)
+    [Fact]
+    public async Task DryRun_PostIsNotSentToJd_AndReportsSuccess()
+    {
+        // A mutating call must never reach JD in DryRun — the handler should see zero calls — yet the
+        // caller still gets a success so the sync proceeds (and logs the would-be payload).
+        var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, "{}");
+        var repo = BuildRepo(handler, dryRun: true);
+
+        var result = await repo.UpsertIncomingShipmentAsync(
+            new NeroTrade.JDIntegration.Models.ExternalIntegration.JdIncomingShipmentCreate(), CancellationToken.None);
+
+        Assert.True(result.ok);
+        Assert.Equal(0, handler.CallCount); // nothing sent to JD
+    }
+
+    [Fact]
+    public async Task DryRun_GetStillReachesJd()
+    {
+        // Reads must still execute in DryRun so catalog/container-type/dedup lookups keep working.
+        var body = """[{"id":1,"name":"Stk"}]""";
+        var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, body);
+        var repo = BuildRepo(handler, dryRun: true);
+
+        var result = await repo.GetContainerTypesAsync(CancellationToken.None);
+
+        Assert.Single(result);
+        Assert.Equal(1, handler.CallCount); // GET went through
+    }
+
+    private static JdRepository BuildRepo(HttpMessageHandler handler, bool dryRun = false)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://stub.invalid/") };
-        var settings = new JdSettings { BaseUrl = "http://stub.invalid/", TimeoutSeconds = 5 };
+        var settings = new JdSettings { BaseUrl = "http://stub.invalid/", TimeoutSeconds = 5, DryRun = dryRun };
         return new JdRepository(http, settings, NullLogger<JdRepository>.Instance);
     }
 

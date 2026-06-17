@@ -1,10 +1,24 @@
 namespace NeroTrade.JDIntegration.Services.UnicontaHandler;
 
+using Microsoft.Extensions.Logging;
 using Models;
+using NeroTrade.JDIntegration.Models.Settings;
 using Repositories;
 
-public sealed class UnicontaService(IUnicontaRepository repo) : IUnicontaService
+public sealed class UnicontaService(IUnicontaRepository repo, JdSettings jdSettings, ILogger<UnicontaService> logger) : IUnicontaService
 {
+    // DryRun is the integration-wide "mutate nothing" switch (env var JD__DryRun). It already blocks
+    // every mutating JD call in JdRepository; we guard the Uniconta writes here too so a dry run is
+    // fully side-effect free. Without this guard a dry run still wrote order-status fields back to
+    // Uniconta — most damagingly marking just-pushed sales orders "Oprettet", so they were then
+    // skipped on the real run (filter requires Group empty or "Fejlet"). Mutating methods short-circuit
+    // to success (Task.FromResult(true)) so the caller's happy path and the JD payload preview complete
+    // unchanged, mirroring JdRepository's synthetic 200 OK. Reads are never guarded.
+    private Task<bool> DryRunSkipUnicontaWrite(string operation)
+    {
+        logger.LogInformation("[DRY-RUN] Skipping Uniconta write {Operation} — nothing written to Uniconta.", operation);
+        return Task.FromResult(true);
+    }
     public async IAsyncEnumerable<LocalDebtor> ReadDebtorsBatchedAsync(int batchSize, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var buffer = new List<LocalDebtor>(batchSize);
@@ -83,26 +97,31 @@ public sealed class UnicontaService(IUnicontaRepository repo) : IUnicontaService
 
     public Task<bool> UpdateSalesOrderGroupAsync(int orderNumber, string group, CancellationToken cancellationToken)
     {
+        if (jdSettings.DryRun) return DryRunSkipUnicontaWrite($"UpdateSalesOrderGroup(order={orderNumber}, group={group})");
         return repo.UpdateSalesOrderGroupAsync(orderNumber, group, cancellationToken);
     }
 
     public Task<bool> SetSalesOrderStatusAsync(int orderNumber, string group, IReadOnlyDictionary<string, object> userFields, CancellationToken cancellationToken)
     {
+        if (jdSettings.DryRun) return DryRunSkipUnicontaWrite($"SetSalesOrderStatus(order={orderNumber}, group={group})");
         return repo.SetSalesOrderStatusAsync(orderNumber, group, userFields, cancellationToken);
     }
 
     public Task<bool> UpdatePurchaseOrderLineQuantityAsync(int purchaseNumber, string sku, double qtyNow, CancellationToken cancellationToken)
     {
+        if (jdSettings.DryRun) return DryRunSkipUnicontaWrite($"UpdatePurchaseOrderLineQuantity(po={purchaseNumber}, sku={sku}, qty={qtyNow})");
         return repo.UpdatePurchaseOrderLineQuantityAsync(purchaseNumber, sku, qtyNow, cancellationToken);
     }
 
     public Task<bool> SetPurchaseOrderHeaderFieldAsync(int purchaseNumber, string fieldName, object value, CancellationToken cancellationToken)
     {
+        if (jdSettings.DryRun) return DryRunSkipUnicontaWrite($"SetPurchaseOrderHeaderField(po={purchaseNumber}, field={fieldName})");
         return repo.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, fieldName, value, cancellationToken);
     }
 
     public Task<bool> SetPurchaseOrderHeaderFieldsAsync(int purchaseNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
     {
+        if (jdSettings.DryRun) return DryRunSkipUnicontaWrite($"SetPurchaseOrderHeaderFields(po={purchaseNumber}, fields=[{string.Join(",", fields.Keys)}])");
         return repo.SetPurchaseOrderHeaderFieldsAsync(purchaseNumber, fields, cancellationToken);
     }
 

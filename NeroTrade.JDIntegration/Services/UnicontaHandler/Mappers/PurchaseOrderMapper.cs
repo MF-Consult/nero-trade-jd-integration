@@ -21,13 +21,34 @@ public sealed class PurchaseOrderMapper
             disableApprovalEmail = false,
             files = []
         };
+
+        // JD expects pallet/container shipments as a parent (isSubItem=false, the container) with the
+        // products as children (isSubItem=true). When the Lagerhotel container fields are set we emit
+        // that parent here; otherwise the products go as a flat list (isSubItem=false) — both are valid
+        // JD structures. The previous code hardcoded isSubItem=true on every line with no parent, which
+        // left the pallet structure malformed on the incoming shipment.
+        var hasContainer = !string.IsNullOrWhiteSpace(po.ContainerType) && po.ContainerCount is > 0;
+        if (hasContainer)
+        {
+            // Pure container parent: no SKU/catalog. unit carries the container-type name so
+            // JdLogisticsService.SetContainerTypesAsync resolves its inventoryContainerType, and
+            // ResolveCatalogItems skips it (no SKU). It is added first so it precedes its children.
+            create.lines.Add(new JdIncomingLine
+            {
+                quantity = (int)Math.Round(po.ContainerCount!.Value),
+                isSubItem = false,
+                Sku = null,
+                unit = po.ContainerType!.Trim()
+            });
+        }
+
         foreach (var line in po.Lines)
         {
             if (string.IsNullOrWhiteSpace(line.Sku)) continue;
             create.lines.Add(new JdIncomingLine
             {
                 quantity = (int)Math.Round(line.Quantity),
-                isSubItem = line.IsSubItem,
+                isSubItem = hasContainer, // child of the container parent, or flat (false) when none
                 externalIdentification = string.IsNullOrWhiteSpace(line.CustomerItemNumber)
                     ? null
                     : line.CustomerItemNumber,

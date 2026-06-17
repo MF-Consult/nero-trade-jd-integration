@@ -13,7 +13,8 @@ namespace NeroTrade.JDIntegration.Functions;
 /// Manually deletes a specific sales order (JD request order) from JD by its Uniconta SO number.
 /// Matches on the same "SO {n}" reference used for upsert dedup, so it finds the order regardless of
 /// its JD status — including cancelled orders that must be fully removed before a new one can be uploaded.
-/// Deletion always executes (it ignores DryRun) because it is a deliberate, manually triggered action.
+/// Like every JD write, deletion respects DryRun: with DryRun on it is logged and skipped (the call
+/// reports success but nothing is removed). Turn DryRun off to perform a real manual deletion.
 ///
 /// Access via: DELETE or POST /api/delete-sales-order-from-jd/{soNumber}
 /// </summary>

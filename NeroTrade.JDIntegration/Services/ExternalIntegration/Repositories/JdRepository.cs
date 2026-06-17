@@ -274,9 +274,10 @@ public sealed class JdRepository : IJdRepository
 
     public async Task<(bool ok, int status, string message, JdRequestOrder? returned)> CreateRequestOrderAsync(long inventoryId, JdRequestOrderCreate payload, CancellationToken cancellationToken)
     {
-        // Check if date is in the past and adjust if necessary
-        if(payload.date < DateTime.UtcNow)
-            payload.date = DateTime.UtcNow;
+        // Keep the intended delivery day (only bump a genuinely past day up to today). The old
+        // `if (payload.date < DateTime.UtcNow) payload.date = DateTime.UtcNow` overwrote a same-day
+        // "deliver today" order with the current instant, which JD pushed to the next business day.
+        payload.date = JdDeliveryDate.Normalize(payload.date, DateTime.UtcNow);
 
         var jsonPayload = JsonSerializer.Serialize(payload);
         var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Post, $"api/inventories/{inventoryId}/requestorders")
@@ -304,6 +305,28 @@ public sealed class JdRepository : IJdRepository
 
     private async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> requestFactory, CancellationToken ct)
     {
+        // DryRun: never let a mutating call (POST/PUT/PATCH/DELETE) reach JD. Log the would-be method,
+        // path and payload so a dry run shows exactly what would be sent, then return a synthetic 200
+        // with an empty JSON body. Reads (GET) fall through and execute normally, so all the build-up
+        // logic that depends on JD lookups (catalog/container-type resolution, dedup) still runs and
+        // the full payload is produced for inspection. Guarantees a dry run mutates nothing in JD.
+        if (_settings.DryRun)
+        {
+            using var preview = requestFactory();
+            if (IsMutating(preview.Method))
+            {
+                var body = preview.Content is null ? null : await preview.Content.ReadAsStringAsync(ct);
+                _logger.LogInformation(
+                    "[DRY-RUN] Skipping {Method} {Uri} — nothing sent to JD.{Payload}",
+                    preview.Method, preview.RequestUri,
+                    string.IsNullOrEmpty(body) ? string.Empty : $" Payload: {body}");
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json")
+                };
+            }
+        }
+
         const int maxAttempts = 3;
         var delay = TimeSpan.FromSeconds(1);
         for (int attempt = 1; ; attempt++)
@@ -333,6 +356,9 @@ public sealed class JdRepository : IJdRepository
 
     private static bool IsTransient(int statusCode)
         => statusCode == 408 || statusCode == 429 || (statusCode >= 500 && statusCode < 600);
+
+    private static bool IsMutating(HttpMethod method)
+        => method == HttpMethod.Post || method == HttpMethod.Put || method == HttpMethod.Patch || method == HttpMethod.Delete;
 
     // File operations
     public async Task<(bool ok, int status, string message, JdFileResponse? returned)> CreateFileAsync(JdFileCreate file, CancellationToken cancellationToken)

@@ -81,4 +81,90 @@ public class PurchaseOrderMapperTests
         Assert.StartsWith("PO 2203", create.text);
         Assert.Equal(2203, JdOrderHelper.GetPurchaseOrderNumber(create.text));
     }
+
+    // --- Lagerhotel container parent / sub-item structure ---
+    // JD expects a pallet shipment as a parent (isSubItem=false, the container) with the products as
+    // children (isSubItem=true). Without the container fields the products go as a flat list. This
+    // replaces the old behaviour where every line was hardcoded isSubItem=true with no parent.
+
+    [Fact]
+    public void Map_WithoutContainerFields_SendsFlatProductLines_NoParent()
+    {
+        var po = new LocalPurchaseOrder { PurchaseNumber = 2300 };
+        po.Lines.Add(new LocalPurchaseOrderLine { Sku = "A", Quantity = 2, Unit = "Stk" });
+        po.Lines.Add(new LocalPurchaseOrderLine { Sku = "B", Quantity = 1, Unit = "Stk" });
+
+        var create = new PurchaseOrderMapper().Map(po);
+
+        Assert.Equal(2, create.lines.Count);
+        Assert.All(create.lines, l => Assert.False(l.isSubItem!.Value));
+        Assert.All(create.lines, l => Assert.False(string.IsNullOrEmpty(l.Sku)));
+    }
+
+    [Fact]
+    public void Map_WithContainerFields_EmitsContainerParentThenChildren()
+    {
+        var po = new LocalPurchaseOrder
+        {
+            PurchaseNumber = 2301,
+            ContainerType = "Palle",
+            ContainerCount = 3
+        };
+        po.Lines.Add(new LocalPurchaseOrderLine { Sku = "A", Quantity = 5, Unit = "Stk" });
+        po.Lines.Add(new LocalPurchaseOrderLine { Sku = "B", Quantity = 2, Unit = "Stk" });
+
+        var create = new PurchaseOrderMapper().Map(po);
+
+        Assert.Equal(3, create.lines.Count);
+
+        var parent = create.lines[0];
+        Assert.False(parent.isSubItem!.Value);   // the container itself
+        Assert.Null(parent.Sku);                  // pure container, no catalog item
+        Assert.Equal(3, parent.quantity);         // antal paller
+        Assert.Equal("Palle", parent.unit);       // resolved to JD container type downstream
+
+        Assert.All(create.lines.Skip(1), child =>
+        {
+            Assert.True(child.isSubItem!.Value);  // products hang under the parent
+            Assert.False(string.IsNullOrEmpty(child.Sku));
+        });
+    }
+
+    [Fact]
+    public void Map_DoesNotSerializeInternalKeys_ToJdPayload()
+    {
+        // unit (container-type/unit resolution key) and Sku are internal only — they are NOT part of
+        // JD's IncomingShipmentLineRbo schema and must never reach the payload (they are consumed in
+        // memory to fill inventoryContainerType / catalog before the shipment is serialized).
+        var po = new LocalPurchaseOrder { PurchaseNumber = 2400, ContainerType = "Palle", ContainerCount = 1 };
+        po.Lines.Add(new LocalPurchaseOrderLine { Sku = "A", Quantity = 1, Unit = "Stk" });
+
+        var json = System.Text.Json.JsonSerializer.Serialize(new PurchaseOrderMapper().Map(po));
+
+        Assert.DoesNotContain("\"unit\"", json);
+        Assert.DoesNotContain("\"Sku\"", json);
+        Assert.Contains("\"isSubItem\"", json);
+        Assert.Contains("\"quantity\"", json);
+    }
+
+    [Theory]
+    [InlineData("Palle", 0)]   // type chosen but no count
+    [InlineData(null, 3)]      // count but no type
+    [InlineData("", 3)]        // blank type
+    public void Map_TreatsIncompleteContainerFields_AsFlatList(string? containerType, double count)
+    {
+        var po = new LocalPurchaseOrder
+        {
+            PurchaseNumber = 2302,
+            ContainerType = containerType,
+            ContainerCount = count
+        };
+        po.Lines.Add(new LocalPurchaseOrderLine { Sku = "A", Quantity = 1, Unit = "Stk" });
+
+        var create = new PurchaseOrderMapper().Map(po);
+
+        var line = Assert.Single(create.lines);
+        Assert.False(line.isSubItem!.Value);
+        Assert.Equal("A", line.Sku);
+    }
 }

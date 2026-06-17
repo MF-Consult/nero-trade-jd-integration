@@ -244,8 +244,9 @@ public sealed class JdLogisticsService(
 
     public async Task<UpsertResult<JdRequestOrderCreate>> UpsertRequestOrdersAsync(long inventoryId, IEnumerable<JdRequestOrderCreate> orders, CancellationToken cancellationToken)
     {
-        // Build existing map keyed by shop order identifier (text first, then deliveryNoteText — the
-        // "SO {n}" reference is written to deliveryNoteText on newer orders).
+        // Build existing map keyed by shop order identifier. The "SO {n}" reference leads the text
+        // field ("Intern Note") on outgoing orders; JdOrderHelper falls back to deliveryNoteText so
+        // legacy orders (key on the delivery-note text) keep matching.
         // Exclude cancelled (Annulleret) orders from the dedup map. JD does not hard-remove a cancelled
         // request order (DELETE returns 204 but it lingers in the list), so a dead cancelled order must
         // not match an incoming sales order — otherwise the re-upload is skipped, or tries to "recreate"
@@ -298,21 +299,32 @@ public sealed class JdLogisticsService(
                     }
 
                     var created = await repository.CreateRequestOrderAsync(inventoryId, order, cancellationToken);
-                    if (created.ok) result.SuccessCount++; else result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, created.status, created.message));
+                    if (created.ok) { result.SuccessCount++; RecordJdId(result, order, created.returned?.id); }
+                    else result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, created.status, created.message));
                 }
                 else
                 {
                     // No significant changes, skip
                     _logger.LogDebug("Request order {ShopOrderId} already exists with no significant changes, skipping", key);
                     result.SuccessCount++;
+                    RecordJdId(result, order, existingOrder.id); // backfill JD id onto already-synced orders
                 }
                 continue;
             }
 
             var createdNew = await repository.CreateRequestOrderAsync(inventoryId, order, cancellationToken);
-            if (createdNew.ok) result.SuccessCount++; else result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, createdNew.status, createdNew.message));
+            if (createdNew.ok) { result.SuccessCount++; RecordJdId(result, order, createdNew.returned?.id); }
+            else result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, createdNew.status, createdNew.message));
         }
         return result;
+    }
+
+    // Map JD's request-order id back to the source (Uniconta) order number so the caller can write
+    // it onto the sales order. No-op when either id is missing.
+    private static void RecordJdId(UpsertResult<JdRequestOrderCreate> result, JdRequestOrderCreate order, long? jdId)
+    {
+        if (order.SourceOrderNumber.HasValue && jdId.HasValue)
+            result.JdOrderIdBySourceOrder[order.SourceOrderNumber.Value] = jdId.Value;
     }
     
     // GetShopOrderKey method removed in favor of JdOrderHelper.GetOrderNumberString
@@ -453,6 +465,14 @@ public sealed class JdLogisticsService(
         var unresolved = new List<string>();
         foreach (var line in shipment.lines)
         {
+            // A line with no SKU is the pure container parent (the pallet/container itself, set from
+            // the Lagerhotel fields in PurchaseOrderMapper). It has no catalog item — JD identifies it
+            // via inventoryContainerType, set later in SetContainerTypesAsync — so skip catalog
+            // resolution. Product lines without a SKU are already filtered out in the mapper, so the
+            // only SKU-less line that reaches here is that container parent.
+            if (string.IsNullOrWhiteSpace(line.Sku))
+                continue;
+
             // Use Sku for lookup if available, otherwise try externalIdentification (fallback).
             // Trim to match the catalog cache, which is keyed on the trimmed SKU (see ItemMapper).
             var skuToLookup = (!string.IsNullOrWhiteSpace(line.Sku) ? line.Sku : line.externalIdentification)?.Trim();

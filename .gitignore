@@ -3,3 +3,13 @@ obj/
 /packages/
 riderModule.iml
 /_ReSharper.Caches/
+*.user
+.vs/
+# Per-developer ClickOnce path to the local Uniconta test client — machine specific
+NeroTrade.UnicontaPlugin/Properties/launchSettings.json
+
+# Azure Functions local settings — contains JD/Uniconta secrets, never commit
+local.settings.json
+
+# Local dry-run / Functions host log capture
+jd-dryrun-host.log
