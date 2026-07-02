@@ -32,6 +32,7 @@ public class UnicontaServiceDryRunTests
         Assert.True(await service.UpdatePurchaseOrderLineQuantityAsync(100, "SKU1", 3, default));
         Assert.True(await service.SetPurchaseOrderHeaderFieldAsync(100, "xField", "v", default));
         Assert.True(await service.SetPurchaseOrderHeaderFieldsAsync(100, new Dictionary<string, object>(), default));
+        Assert.True(await service.SetPurchaseInvoiceHeaderFieldsAsync(32, new Dictionary<string, object>(), default));
 
         Assert.Equal(0, spy.WriteCallCount);
     }
@@ -47,8 +48,9 @@ public class UnicontaServiceDryRunTests
         await service.UpdatePurchaseOrderLineQuantityAsync(100, "SKU1", 3, default);
         await service.SetPurchaseOrderHeaderFieldAsync(100, "xField", "v", default);
         await service.SetPurchaseOrderHeaderFieldsAsync(100, new Dictionary<string, object>(), default);
+        await service.SetPurchaseInvoiceHeaderFieldsAsync(32, new Dictionary<string, object>(), default);
 
-        Assert.Equal(5, spy.WriteCallCount);
+        Assert.Equal(6, spy.WriteCallCount);
     }
 
     private static UnicontaSvc BuildService(IUnicontaRepository repo, bool dryRun) =>
@@ -74,10 +76,14 @@ public class UnicontaServiceDryRunTests
         public Task<bool> SetPurchaseOrderHeaderFieldsAsync(int purchaseNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
         { WriteCallCount++; return Task.FromResult(true); }
 
+        public Task<bool> SetPurchaseInvoiceHeaderFieldsAsync(int orderNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
+        { WriteCallCount++; return Task.FromResult(true); }
+
         // Reads are never exercised by these tests — return empty sequences.
         public IAsyncEnumerable<LocalDebtor> ReadAllDebtorsAsync(CancellationToken cancellationToken) => EmptyAsync<LocalDebtor>();
         public IAsyncEnumerable<LocalInventoryItem> ReadAllItemsAsync(CancellationToken cancellationToken) => EmptyAsync<LocalInventoryItem>();
         public IAsyncEnumerable<LocalPurchaseOrder> ReadAllPurchaseOrdersAsync(CancellationToken cancellationToken) => EmptyAsync<LocalPurchaseOrder>();
+        public IAsyncEnumerable<LocalPurchaseInvoice> ReadPostedPurchaseInvoicesAsync(CancellationToken cancellationToken) => EmptyAsync<LocalPurchaseInvoice>();
         public IAsyncEnumerable<LocalSalesOrder> ReadAllSalesOrdersAsync(CancellationToken cancellationToken) => EmptyAsync<LocalSalesOrder>();
         public IAsyncEnumerable<LocalSalesOrder> ReadSalesOrdersWithGroupAsync(CancellationToken cancellationToken) => EmptyAsync<LocalSalesOrder>();
         public IAsyncEnumerable<DebtorDeliveryNoteInfo> ReadDebtorDeliveryNotesAsync(CancellationToken cancellationToken) => EmptyAsync<DebtorDeliveryNoteInfo>();

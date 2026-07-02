@@ -144,6 +144,7 @@ public sealed class UnicontaService(IUnicontaRepository repo, JdSettings jdSetti
 
     public Task<bool> SetPurchaseInvoiceHeaderFieldsAsync(int orderNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
     {
+        if (jdSettings.DryRun) return DryRunSkipUnicontaWrite($"SetPurchaseInvoiceHeaderFields(order={orderNumber}, fields=[{string.Join(",", fields.Keys)}])");
         return repo.SetPurchaseInvoiceHeaderFieldsAsync(orderNumber, fields, cancellationToken);
     }
 
