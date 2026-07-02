@@ -108,6 +108,85 @@ Three baseline rules → all share one Action Group that posts to `#nero-trade-j
 
 Create the Slack Action Group once: **Monitor → Action groups → New** → action type **Webhook** → Slack incoming webhook URL. Reuse it across the three alert rules.
 
+### 4.4 Uniconta user fields (sales + purchase orders)
+
+These user-defined fields must exist in Uniconta (company **129192**) with the **exact** names below before the
+integration runs. The source of truth is `Services/UnicontaHandler/Constants/UnicontaUserFields.cs`; the sales-order
+subset is mirrored in the plugin's `PluginFieldNames.cs` (pinned by `PluginFieldNamesTests`). Fail-open: a missing field
+never crashes the integration, but the corresponding mapping/validation silently does nothing.
+
+**Format** = Uniconta field type. **Value-list order matters** — the plugin maps a stored index back to its text via the
+fixed order shown (`UserFieldValueNormalizer`); create the list entries in that order.
+
+#### Sales order (`DebtorOrder`)
+
+User-filled:
+
+| Field | Format | Values / note | Required when `xTransferToJD` = Ja |
+|---|---|---|---|
+| `xTransferToJD` | Checkbox (bool) | Opt-in: transfer the order to JD | — (the trigger itself) |
+| `xTransportTypes` | Value list | `JD Logistik Transport` (0), `Ekstern Transport` (1), `Afhenter Selv` (2) — **in that order** | ✅ always |
+| `xDeliveryType` | Value list | `GLS` (0), `Palle Fragt` (1) — **in that order** | ✅ only when transport = JD Logistik (hidden otherwise) |
+| `xByttepaller` | Value list | `Ja` (0), `Nej` (1) — **no default (blank)** | ✅ only for pallet orders (hidden otherwise) |
+| `xTrackingNote` | Text | Tracking note → JD internal note | ✅ always |
+| `xTrackingNoteOnLabel` | Text | Note on delivery label | no |
+| `xRemarksForJD` | Text | Remark → appended to JD internal note | no |
+| `xTimeForDelivery` | Date/time | Only the time-of-day is used (timed delivery) | no |
+| `xMessageForTransport` | Text | Message to carrier (`carrierInstructions`) | no |
+| Delivery date (`DeliveryDate`, built-in) | Date | Standard field — must be filled | ✅ always |
+
+Integration-written (must **exist**, never filled manually):
+
+| Field | Format | Written by |
+|---|---|---|
+| `xJDOrderId` | Text | JD's request-order id, written back on create |
+| `xIntegrationIssue` | Text | Failure reason on JD reject (cleared on success) |
+| Order group (`Group`, built-in) | Value list | Set to `Oprettet` / `Fejlet`, then the live JD status |
+
+#### Purchase order (`CreditorOrder`)
+
+User-filled:
+
+| Field | Format | Values / note | Maps to JD |
+|---|---|---|---|
+| `xTransferToJD` | Checkbox (bool) | Opt-in: transfer to JD | trigger |
+| `xCarrier` | Text | **Speditør** (freight forwarder) | → `carrier` |
+| `xRemarksForJD` | Text | **Bemærkninger** (manpower needs etc.) | → `text` (after `PO {n}`) |
+| `xEnhedstype` | Value list | `Palle`, `Container` — **names must match JD's container types exactly** | → parent line `inventoryContainerType` |
+| `xAntalEnheder` | Number | Count of pallets/containers | → parent line `quantity` |
+| Delivery date (`DeliveryDate`, built-in) | Date | Expected delivery date | → `date` |
+
+> The Lagerhotel fields (`xEnhedstype` + `xAntalEnheder`) drive the JD parent/child structure: when both are set the
+> shipment gets a pure-container parent line (`isSubItem=false`, no SKU) with the product lines as children
+> (`isSubItem=true`); when unset the products go as a flat list. Group `xCarrier` / `xRemarksForJD` / `xEnhedstype` /
+> `xAntalEnheder` under a "Lagerhotel" field group in the UI.
+
+Integration-written:
+
+| Field | Format | Values |
+|---|---|---|
+| `xJDStatus` | Value list | `Oprettet`, `Manuel handling`, `Færdigbehandlet` — blank / `Manuel handling` = pending |
+
+Purchase-order **line** (`CreditorOrderLine`):
+
+| Field | Format | Note |
+|---|---|---|
+| `xExternalSku` | Text | Customer item number → line `externalIdentification` |
+
+**Manual-only (NOT read or written by the integration):**
+
+| Field | Format | Note |
+|---|---|---|
+| `xFixedIssuesJD` | Checkbox (bool) | Staff tick it once they have fixed an issue on a PO line. Purely a visual workflow flag — the integration never reads or sets it. Re-sending a parked PO still happens via `xTransferToJD` (see §7.2). Documented here so it is not mistaken for a missing mapping. |
+
+#### Item & debtor transfer flags (for completeness)
+
+| Table | Field | Format |
+|---|---|---|
+| Item (`InvItem`) | `XoverforVare` | Checkbox (bool) |
+| Item (`InvItem`) | `xExternalSku` | Text (external SKU) |
+| Debtor (`Debtor`) | `Xoverfort` | Checkbox (bool) |
+
 ---
 
 ## 5. `integration_logs` schema reference
@@ -371,6 +450,42 @@ When a row arrives via the Supabase webhook:
 When live:
 - A repeated `UNICONTA_CRUD_FAILED` never reaches Slack — auto-resolves silently via the seed playbook.
 - A novel error escalates to Slack on first occurrence, then auto-resolves on subsequent ones (assuming first remediation was approved).
+
+### Dry-run: safe payload preview
+
+`JdSettings.DryRun` lets you exercise a full sync against **real Uniconta data** while mutating **nothing** in either system — no calls reach JD and no status fields are written back to Uniconta. Used to inspect the exact payload an order would produce (e.g. the purchase-order container parent/child structure, carrier, text) before going live.
+
+How it works: every mutating JD call (`POST` / `PUT` / `PATCH` / `DELETE`) is intercepted in `JdRepository.SendWithRetryAsync`. With `DryRun = true` the call is logged and skipped, returning a synthetic `200 OK`; **`GET` reads still execute**, so catalog / container-type lookups and dedup run normally and the payload is built in full. A dry run therefore mutates nothing in JD (this includes the manual `DeleteSalesOrderFromJd` — turn DryRun off for a real deletion).
+
+Uniconta writes are guarded the same way: every mutating method on `UnicontaService` (sales-order status, purchase-order header/line fields) short-circuits under `DryRun`, logging `[DRY-RUN] Skipping Uniconta write …` and returning success without touching Uniconta. **Added 2026-06-17** — before this fix `DryRun` only blocked JD, so a dry run still wrote order status back to Uniconta and would mark just-previewed sales orders **`Oprettet`**, causing them to be skipped on the next real run (the eligibility filter in `UnicontaRepository.ReadAllSalesOrdersAsync` requires `Group` empty or `Fejlet`). If you ran a dry run on a build before this fix, reset the affected orders' JD-status field (`Group`) to empty before going live so they re-transfer.
+
+**1. Enable** in `NeroTrade.JDIntegration/local.settings.json` under `Values` (or as env var `JD__DryRun=true`). Note the config section is `JD`, so the key is `JD__DryRun` (not `JdSettings__…`):
+
+```json
+"JD__DryRun": "true"
+```
+
+**2. Start the host:**
+
+```bash
+dotnet run --project NeroTrade.JDIntegration   # Azure Functions on port 8000
+```
+
+**3. Trigger each order type** via the Functions admin endpoint (reads the `xTransferToJD`-flagged orders in company 129192, builds and logs the payload, sends nothing):
+
+```bash
+# Purchase orders → JD incoming shipments (clean dry-run, no PDF)
+curl -X POST http://localhost:8000/admin/functions/SyncPurchaseOrdersToJd -H "Content-Type: application/json" -d "{}"
+
+# Sales orders → JD request orders
+curl -X POST http://localhost:8000/admin/functions/SyncSalesOrdersToJd -H "Content-Type: application/json" -d "{}"
+```
+
+The console shows `[DRY-RUN] Skipping POST api/incomingshipments — Payload: {…}` (purchase) and `… api/inventories/{id}/requestorders — Payload: {…}` (sales). Verify the container parent, carrier, text, and that the internal keys (`unit` / `id` / `Sku`) are absent from the line payload.
+
+**Sales-order caveat:** a delivery-note PDF is uploaded to JD *before* the request order. Those file calls are skipped too in DryRun, so you will see `pdf_fail` warnings and `files: []` on the request-order payload — expected and harmless; the request-order payload itself is still logged in full. Purchase orders have no PDF, so their dry-run is completely clean.
+
+> Remember to set `JD__DryRun` back to `false` before deploying or running a real sync.
 
 ---
 

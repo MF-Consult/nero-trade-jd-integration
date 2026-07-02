@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ Field-mapping contract (read first)
+
+**[docs/field-mapping.md](docs/field-mapping.md) is the authoritative source of truth for every
+Uniconta ↔ JD field translation (both directions, both order types).**
+
+- It **must ALWAYS be respected.** Never change a mapping (rename a source field, alter a transform,
+  add/drop a JD field) unless the user **explicitly asks for that specific change** in the session.
+- **Every mapping change in code MUST be reflected in `docs/field-mapping.md` in the same change**,
+  with a dated entry in its Changelog. Code and that doc must never diverge.
+- Before editing `SalesOrderMapper.cs`, `PurchaseOrderMapper.cs`, the order-sourcing in
+  `UnicontaRepository.cs`, or `UnicontaUserFields.cs`, read that doc and keep it in sync.
+
 ## Build & Run Commands
 
 ```bash
@@ -11,12 +23,27 @@ dotnet build
 # Build for release (matches what CI does for deploy — function project only, not the .sln)
 dotnet build NeroTrade.JDIntegration/NeroTrade.JDIntegration.csproj --configuration Release --output ./output
 
-# Run locally (Azure Functions on port 8000)
-dotnet run --project NeroTrade.JDIntegration
-
 # Run unit tests
 dotnet test NeroTrade.JDIntegration.Tests/NeroTrade.JDIntegration.Tests.csproj
 ```
+
+### Running the Functions host locally (gotcha)
+
+`dotnet run --project NeroTrade.JDIntegration` **does not work on this machine**: the isolated host
+delegates to `func`, and the npm `func` shim has no `func.exe`, so the launch fails with
+*"error trying to start process 'func' … file not found."* Use one of:
+
+```bash
+# Azure Functions Core Tools directly (port 8000)
+func host start --port 8000 --dotnet-isolated    # run from the NeroTrade.JDIntegration/ project dir
+```
+
+…or just press **F5 in Visual Studio** (its launch profile already runs the host on 8000).
+
+**Build-lock note:** while a VS debug session is running the host, `bin\Debug\net9.0\NeroTrade.JDIntegration.dll`
+is locked, so `dotnet build`/`dotnet test` fail at the copy step. Either stop debugging (Shift+F5), or
+build/test to a temp output to verify without disturbing it:
+`dotnet test … -p:BaseOutputPath=$env:TEMP\jdverify\`.
 
 Unit tests live in `NeroTrade.JDIntegration.Tests/`. They pin the JD repository / cache / classifier contracts that recent prod incidents have depended on (cache poisoning, request-message reuse, error-code mapping). CI runs them on every PR (`.github/workflows/pr-build-and-test.yml`) and again before deploy on master. `TestGeneratePdf` is still a manual HTTP-triggered function for ad-hoc PDF testing.
 
@@ -71,7 +98,11 @@ CI/CD via GitHub Actions (`.github/workflows/master_nero-trade-data-syncer.yml`)
 
 ### Notable Patterns
 
-- `DryRun` mode in `JdSettings` prevents writes to JD (log-only) — useful for testing
+- `DryRun` mode (`JD__DryRun`) is the integration-wide "mutate nothing" switch — it blocks **both**
+  mutating JD calls (`JdRepository.SendWithRetryAsync`) **and** Uniconta writes (`UnicontaService`),
+  so a dry run is fully side-effect free. Used for safe payload previews — see [docs/operations.md §10](docs/operations.md). `GET` reads still run, so payloads build in full.
+- Sales-order eligibility: `xTransferToJD` = true, `Group` empty/`Fejlet`, and `UpdatedAt` within the
+  last **1 day** (`SalesOrderRecentWindow`). Purchase orders have no time window (all scanned).
 - Nullable reference types are enabled — null-check Uniconta query results carefully
 - All sync functions are `TimerTrigger`-based except `TestGeneratePdf` (HTTP) and `SyncDebtorsToJd` (HTTP)
 

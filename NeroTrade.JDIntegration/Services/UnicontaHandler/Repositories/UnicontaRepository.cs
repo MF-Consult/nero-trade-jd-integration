@@ -77,6 +77,12 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 DeliveryZip = o._DeliveryZipCode,
                 DeliveryCity = o._DeliveryCity,
                 DeliveryCountryCode = o._DeliveryCountry == 0 ? "DK" : o._DeliveryCountry.ToString(),
+                DeliveryDate = o._DeliveryDate == default ? (DateTime?)null : o._DeliveryDate,
+                Carrier = o.GetUserField(UnicontaUserFields.PurchaseOrderCarrier) as string,
+                RemarkText = o.GetUserField(UnicontaUserFields.PurchaseOrderRemark) as string,
+                ContainerType = o.GetUserField(UnicontaUserFields.PurchaseOrderContainerType) as string,
+                // Numeric user fields come back boxed; Convert handles double/int/string without throwing.
+                ContainerCount = ToNullableDouble(o.GetUserField(UnicontaUserFields.PurchaseOrderContainerCount)),
             };
 
             // Fetch detail lines using Master/Detail query to ensure lines are loaded
@@ -88,7 +94,6 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 {
                     Sku = l._Item,
                     Quantity = l._Qty,
-                    IsSubItem = true,
                     Unit = l.Unit,
                     CustomerItemNumber = l.GetUserField(UnicontaUserFields.ExternalSku) as string
                 });
@@ -98,12 +103,17 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         }
     }
 
-    // Server-side filter window. Any order whose UpdatedAt is within this many minutes will be
-    // returned by the eligibility query. Window must be wide enough that an order which fails JD
-    // validation and is re-clicked by the user still re-appears within the window. 30 min is
-    // generous — typical click-to-sync flow is sub-minute, and a Fejlet re-click bumps UpdatedAt
-    // server-side, so the window resets on user action.
-    private static readonly TimeSpan SalesOrderRecentWindow = TimeSpan.FromMinutes(30);
+    // Server-side filter window. Any order whose UpdatedAt is within this window will be returned by
+    // the eligibility query. Window must be wide enough that an order stays visible from the time it
+    // is flagged until it is actually processed — including orders flagged late in the day that only
+    // get picked up the next morning, and orders that fail JD validation and are re-clicked later.
+    // Widened from 30 min → 1 day on 2026-06-17: a 30-min window silently dropped orders flagged the
+    // previous day (observed when orders sat overnight before processing), which is exactly the kind
+    // of gap that can pile up unnoticed over a holiday. Cost is negligible: the in-memory filter below
+    // still excludes already-"Oprettet" orders, so a wider window re-queries more rows but processes
+    // only the genuinely-pending ones. A Fejlet re-click bumps UpdatedAt server-side, so the window
+    // also resets on user action.
+    private static readonly TimeSpan SalesOrderRecentWindow = TimeSpan.FromDays(1);
 
     public async IAsyncEnumerable<LocalSalesOrder> ReadAllSalesOrdersAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -196,12 +206,16 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
                 DeliveryNoteText = o.GetUserField(UnicontaUserFields.DeliveryNoteText) as string,
                 RemarkText = o.GetUserField(UnicontaUserFields.Remark) as string,
                 DeliveryType = o.GetUserField(UnicontaUserFields.DeliveryType) as string,
+                DeliveryContactPerson = o.DeliveryContactPerson,
                 DeliveryContactEmail = o.DeliveryContactEmail,
                 DeliveryContactPhone = o.DeliveryPhone,
                 // Shipmondo-related fields
                 TransportType = o.GetUserField(UnicontaUserFields.TransportType) as string,
                 DeliveryTime = o.GetUserField(UnicontaUserFields.DeliveryTime) as DateTime?,
                 CarrierMessage = o.GetUserField(UnicontaUserFields.CarrierMessage) as string,
+                // Byttepaller: only "Ja" enables PL_EXCHANGE; blank/Nej/unknown => false (safe default).
+                ExchangePallets = string.Equals(
+                    o.GetUserField(UnicontaUserFields.ExchangePallets) as string, "Ja", StringComparison.OrdinalIgnoreCase),
 
                 DebtorName = debtor?._Name,
                 DebtorCVR = debtor?.CompanyRegNo,
@@ -421,6 +435,38 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
 
             return true;
         });
+
+    /// <summary>
+    /// Converts a boxed Uniconta numeric user-field value to <c>double?</c>, tolerating
+    /// double/int/decimal/string boxing. Returns null for null, blank, or unparseable values so a
+    /// missing "antal" never throws or maps to a spurious zero-count container.
+    /// </summary>
+    private static double? ToNullableDouble(object? value)
+    {
+        switch (value)
+        {
+            case null:
+                return null;
+            case double d:
+                return d;
+            case float f:
+                return f;
+            case int i:
+                return i;
+            case long l:
+                return l;
+            case decimal m:
+                return (double)m;
+            case string s:
+                return double.TryParse(s.Trim(), System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+                    ? parsed
+                    : null;
+            default:
+                try { return Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture); }
+                catch { return null; }
+        }
+    }
 
     // How far back the posted-invoice safety-net scans. A server-side filter on the invoice Date is
     // used (not an in-memory scan of everything) for the same two reasons the sales-order query filters

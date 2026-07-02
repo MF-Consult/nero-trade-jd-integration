@@ -12,6 +12,13 @@ public sealed record UpsertResult<T>
     public List<T> CreatedItems { get; } = new();
 
     public List<UpsertFailure<T>> Failures { get; } = new();
+
+    /// <summary>
+    /// JD's request-order id per source (Uniconta) order number, for orders that were created,
+    /// recreated, or already existed in JD this run. Lets the caller write JD's id back onto the
+    /// Uniconta sales order without a second JD round-trip.
+    /// </summary>
+    public Dictionary<int, long> JdOrderIdBySourceOrder { get; } = new();
 }
 
 public sealed record CreateResult<T>

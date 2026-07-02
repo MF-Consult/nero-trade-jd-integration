@@ -73,6 +73,44 @@ public class IncomingShipmentCatalogResolutionTests
         Assert.Equal(777, Assert.Single(sent.lines).catalog!.id);
     }
 
+    [Fact]
+    public async Task ContainerParentLine_DoesNotFailResolution_AndIsSentWithContainerTypeButNoCatalog()
+    {
+        // A pallet shipment: the container parent has no SKU (so no catalog), only an
+        // inventoryContainerType resolved from its unit ("Palle"); the product line resolves as before.
+        var repo = new FakeJdRepository
+        {
+            CatalogItems = { new JdCatalogItem { id = 555, sku = "ITEM-1" } }
+        };
+        var service = BuildService(repo);
+
+        var po = new LocalPurchaseOrder
+        {
+            PurchaseNumber = 102,
+            ContainerType = "Palle",
+            ContainerCount = 2
+        };
+        po.Lines.Add(new LocalPurchaseOrderLine { Sku = "ITEM-1", Quantity = 4, Unit = "Stk" });
+        var shipment = new PurchaseOrderMapper().Map(po);
+
+        var result = await service.CreateIncomingShipmentsAsync(new[] { shipment }, CancellationToken.None);
+
+        Assert.Equal(1, result.SuccessCount);
+        Assert.Empty(result.Failures);
+
+        var sent = Assert.Single(repo.SentShipments);
+        Assert.Equal(2, sent.lines.Count);
+
+        var parent = sent.lines[0];
+        Assert.False(parent.isSubItem!.Value);
+        Assert.Null(parent.catalog);                        // pure container — never a catalog item
+        Assert.Equal(2, parent.inventoryContainerType!.id); // resolved "Palle" container type
+
+        var child = sent.lines[1];
+        Assert.True(child.isSubItem!.Value);
+        Assert.Equal(555, child.catalog!.id);               // product still resolved normally
+    }
+
     private static JdIncomingShipmentCreate MapPo(int purchaseNumber, params (string sku, string? externalSku)[] lines)
     {
         var po = new LocalPurchaseOrder { PurchaseNumber = purchaseNumber };
@@ -110,7 +148,12 @@ public class IncomingShipmentCatalogResolutionTests
             => Task.FromResult<IReadOnlyList<JdCatalogItem>>(CatalogItems);
 
         public Task<IReadOnlyList<JdContainerType>> GetContainerTypesAsync(CancellationToken cancellationToken)
-            => Task.FromResult<IReadOnlyList<JdContainerType>>(new List<JdContainerType> { new() { id = 1, name = "Stk" } });
+            => Task.FromResult<IReadOnlyList<JdContainerType>>(new List<JdContainerType>
+            {
+                new() { id = 1, name = "Stk" },
+                new() { id = 2, name = "Palle" },
+                new() { id = 3, name = "Container" },
+            });
 
         public Task<IReadOnlyList<JdIncomingShipment>> GetIncomingShipmentsAsync(CancellationToken cancellationToken, int? status = 1)
             => Task.FromResult<IReadOnlyList<JdIncomingShipment>>(new List<JdIncomingShipment>());

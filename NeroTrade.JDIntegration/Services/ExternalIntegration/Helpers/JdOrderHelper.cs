@@ -14,8 +14,10 @@ public static class JdOrderHelper
 
     /// <summary>
     /// Extracts the order number as a string from shopOrderId, the text field, or (fallback) deliveryNoteText.
-    /// Prioritizes shopOrderId. The deliveryNoteText fallback exists because the "SO {n} - {remark}" reference
-    /// is now written to deliveryNoteText rather than text on outgoing orders.
+    /// Prioritizes shopOrderId, then text, then deliveryNoteText. Outgoing orders lead the "SO {n}" machine
+    /// key on <c>text</c> ("Intern Note"); the deliveryNoteText fallback covers legacy orders that carried
+    /// the key on the delivery-note text. <c>trackingNote</c> is deliberately NOT parsed — it holds the free
+    /// Sporingsnote, which could itself contain a stray "SO …".
     /// </summary>
     public static string? GetOrderNumberString(string? shopOrderId, string? text, string? deliveryNoteText = null)
     {
@@ -40,7 +42,7 @@ public static class JdOrderHelper
 
     /// <summary>
     /// Extracts the order number as an int from shopOrderId, the text field, or (fallback) deliveryNoteText.
-    /// Returns 0 if parsing fails.
+    /// Returns 0 if parsing fails. See <see cref="GetOrderNumberString"/> for the lookup priority.
     /// </summary>
     public static int GetOrderNumber(string? shopOrderId, string? text, string? deliveryNoteText = null)
     {

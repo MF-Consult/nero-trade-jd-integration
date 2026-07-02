@@ -4,12 +4,22 @@ namespace NeroTrade.JDIntegration.Models.ExternalIntegration;
 
 public class JdIncomingLine
 {
+    // Not part of JD's create line schema (IncomingShipmentLineRbo) — never consumed from JD reads
+    // either, so keep it out of the payload to stay schema-clean on create.
+    [JsonIgnore]
     public long? id { get; set; }
     public int quantity { get; set; }
     public bool? isSubItem { get; set; }
     public string? externalIdentification { get; set; }
+
+    // Internal resolution keys only — NOT part of JD's IncomingShipmentLineRbo schema, so they must
+    // never reach the payload. unit (the Uniconta unit / container-type name) is matched against JD's
+    // container types in JdLogisticsService.SetContainerTypesAsync to fill inventoryContainerType
+    // below; Sku is matched against JD's catalog to fill catalog.id. Both are consumed in-memory
+    // before the shipment is serialized.
+    [JsonIgnore]
     public string? unit { get; set; }
-    
+
     [JsonIgnore]
     public string? Sku { get; set; }
 

@@ -23,6 +23,7 @@ public sealed class LocalSalesOrder
     public string? DeliveryNoteText { get; init; }
     public string? RemarkText { get; init; }
     public string? DeliveryType { get; init; } // "GLS" or "Palle Fragt"
+    public string? DeliveryContactPerson { get; init; }
     public string? DeliveryContactEmail { get; init; }
     public string? DeliveryContactPhone { get; init; }
     
@@ -34,6 +35,9 @@ public sealed class LocalSalesOrder
     public string? TransportType { get; init; }
     public DateTime? DeliveryTime { get; init; }
     public string? CarrierMessage { get; init; }
+
+    // Byttepaller (xByttepaller = "Ja"). Gates the PL_EXCHANGE service code in SalesOrderMapper.
+    public bool ExchangePallets { get; init; }
 
     // Status mapping
     public string? Group { get; init; }

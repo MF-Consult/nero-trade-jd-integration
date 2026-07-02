@@ -22,6 +22,13 @@ public sealed class LocalPurchaseOrder
     public string? TrackingNote { get; init; }
     public string? DeliveryNoteText { get; init; }
     public string? RemarkText { get; init; }
+    public string? Carrier { get; init; }
+
+    // Lagerhotel: container type (Palle/Container) + count → a JD parent line (a pure container,
+    // isSubItem=false) that the product lines hang under as sub-items. Both must be set for a parent
+    // to be emitted; otherwise the product lines are sent as a flat list.
+    public string? ContainerType { get; init; }
+    public double? ContainerCount { get; init; }
 
     // Shipmondo-related fields
     public string? TransportType { get; init; }
@@ -35,7 +42,6 @@ public sealed class LocalPurchaseOrderLine
 {
     public string Sku { get; init; } = string.Empty;
     public double Quantity { get; init; }
-    public bool IsSubItem { get; init; }
     public string? Unit { get; init; }
     public string? CustomerItemNumber { get; init; }
 }

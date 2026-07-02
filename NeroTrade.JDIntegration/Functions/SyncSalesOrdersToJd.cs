@@ -31,7 +31,7 @@ public sealed class SyncSalesOrdersToJd(
     private static readonly SemaphoreSlim RunLock = new(1, 1);
 
     [Function("SyncSalesOrdersToJd")]
-    public async Task RunAsync([TimerTrigger("*/30 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    public async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
         if (!await RunLock.WaitAsync(0, cancellationToken))
         {
@@ -198,11 +198,17 @@ public sealed class SyncSalesOrdersToJd(
         foreach (var order in batch)
         {
             if (!order.SourceOrderNumber.HasValue || failedOrderNumbers.Contains(order.SourceOrderNumber.Value)) continue;
-            var statusSw = Stopwatch.StartNew();
-            var success = await uniconta.SetSalesOrderStatusAsync(order.SourceOrderNumber.Value, SalesOrderJdGroup.Created, new Dictionary<string, object>
+            var statusFields = new Dictionary<string, object>
             {
                 [UnicontaUserFields.IntegrationIssue] = string.Empty,
-            }, ct);
+            };
+            // Write JD's request-order id back onto the sales order so staff can reference it
+            // without opening JD WMS (Maiwand's request).
+            if (result.JdOrderIdBySourceOrder.TryGetValue(order.SourceOrderNumber.Value, out var jdOrderId))
+                statusFields[UnicontaUserFields.JdOrderId] = jdOrderId.ToString();
+
+            var statusSw = Stopwatch.StartNew();
+            var success = await uniconta.SetSalesOrderStatusAsync(order.SourceOrderNumber.Value, SalesOrderJdGroup.Created, statusFields, ct);
             statusSw.Stop();
             timings.UnicontaStatusUpdateMs += statusSw.ElapsedMilliseconds;
             if (success)

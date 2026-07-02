@@ -28,7 +28,11 @@ jobs:
         run: dotnet restore NeroTrade.JDIntegration.sln
 
       - name: Build
+        # Must build the full solution — both test steps below rely on --no-build.
         run: dotnet build NeroTrade.JDIntegration.sln --configuration Release --no-restore
 
       - name: Test
         run: dotnet test NeroTrade.JDIntegration.Tests/NeroTrade.JDIntegration.Tests.csproj --configuration Release --no-build --verbosity normal
+
+      - name: Test Uniconta plugin
+        run: dotnet test NeroTrade.UnicontaPlugin.Tests/NeroTrade.UnicontaPlugin.Tests.csproj --configuration Release --no-build --verbosity normal

@@ -18,7 +18,7 @@ public sealed class SyncPurchaseOrdersToJd(
     ILogger<SyncPurchaseOrdersToJd> logger)
 {
     [Function("SyncPurchaseOrdersToJd")]
-    public async Task RunAsync([TimerTrigger("*/45 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    public async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
         await using var run = integrationLogger.BeginRun("SyncPurchaseOrdersToJd");
         var logScope = run.Scope;
@@ -32,7 +32,6 @@ public sealed class SyncPurchaseOrdersToJd(
             await foreach (var po in uniconta.ReadPurchaseOrdersBatchedAsync(200, cancellationToken))
             {
                 var payload = mapper.Map(po);
-                payload.text = $"PO {po.PurchaseNumber}";
                 batch.Add(payload);
                 if (batch.Count >= 200)
                 {

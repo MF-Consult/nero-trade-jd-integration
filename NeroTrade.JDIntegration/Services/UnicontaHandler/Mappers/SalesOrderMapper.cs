@@ -102,18 +102,28 @@ public sealed class SalesOrderMapper
         string? carrierCode = null;
         string? productCode = null;
 
-        if (!string.IsNullOrWhiteSpace(so.DeliveryType))
+        // "Afhenter Selv" = customer self-pickup: never assign a carrier, even if a delivery type
+        // still lingers on the order. We deliberately check this BEFORE DeliveryType, because the
+        // delivery-type switch below would otherwise book freight for a self-pickup order. (The
+        // order is still sent to JD for picking — JD must be configured so it does not auto-assign
+        // freight for a self-pickup order; confirm with JD if freight still appears.)
+        var isSelfPickup = string.Equals(so.TransportType?.Trim(), "Afhenter Selv", StringComparison.OrdinalIgnoreCase);
+
+        if (!isSelfPickup)
         {
-            (carrierCode, productCode) = so.DeliveryType.ToUpperInvariant() switch
+            if (!string.IsNullOrWhiteSpace(so.DeliveryType))
             {
-                "GLS" => ("gls", "GLSDK_BP"),
-                "PALLE FRAGT" => ("glimoe", "GLIMOE_PARCEL"),
-                _ => (null, null)
-            };
-        }
-        else if (so.TransportType == "Ekstern Transport")
-        {
-            (carrierCode, productCode) = ("glimoe", "GLIMOE_PARCEL");
+                (carrierCode, productCode) = so.DeliveryType.ToUpperInvariant() switch
+                {
+                    "GLS" => ("gls", "GLSDK_BP"),
+                    "PALLE FRAGT" => ("glimoe", "GLIMOE_PARCEL"),
+                    _ => (null, null)
+                };
+            }
+            else if (so.TransportType == "Ekstern Transport")
+            {
+                (carrierCode, productCode) = ("glimoe", "GLIMOE_PARCEL");
+            }
         }
 
         // JD rule (Mikkel, 2026-05-15): DK postal codes > 4999 must not ship with Glimø; reroute to
@@ -129,7 +139,11 @@ public sealed class SalesOrderMapper
         if (carrierCode != null && productCode != null)
         {
             var productServices = new List<string>();
-            if (ShipmondoProductCatalog.SupportsService(productCode, ShipmondoServiceCodes.PalletExchange))
+            // PL_EXCHANGE is now opt-in per order via xByttepaller (so.ExchangePallets). It used to be
+            // sent unconditionally on every pallet order, which made JD credit pallets that were never
+            // returned. The product allow-list stays as a safety net so the code is never sent to a
+            // product that does not support it.
+            if (so.ExchangePallets && ShipmondoProductCatalog.SupportsService(productCode, ShipmondoServiceCodes.PalletExchange))
             {
                 productServices.Add(ShipmondoServiceCodes.PalletExchange);
             }
@@ -155,19 +169,38 @@ public sealed class SalesOrderMapper
         // Get country information
         var (countryCode, countryName) = CountryHelper.GetCountryInfo(so.DeliveryCountryCode);
 
-        // Per JD (Mikkel, 2026-05-12): the "SO {n} - {remark}" reference goes in deliveryNoteText, not text.
-        // JdOrderHelper falls back to deliveryNoteText when identifying the order on read-back.
-        var soReference = $"SO {so.OrderNumber} - {so.RemarkText}";
-        var deliveryNoteText = string.IsNullOrWhiteSpace(so.DeliveryNoteText)
+        // JD request-order field mapping — each Uniconta note lands in its own JD field:
+        //   text             → "Intern Note": the "SO {n}" machine key, plus the xRemarksForJD remark
+        //                      ("Bemærkning til JD") after a " - " separator. JdOrderHelper reads the
+        //                      key back from text; it leads, so the leftmost match wins even if the
+        //                      remark mentions another SO. The UC number is NOT on the følgeseddel.
+        //   trackingNote     → xTrackingNote (Sporingsnote) — its own dedicated JD field.
+        //   deliveryNoteText → "Note på følgeseddel" (xTrackingNoteOnLabel) — label text only.
+        var soReference = $"SO {so.OrderNumber}";
+        var remark = so.RemarkText?.Trim();
+        var internalNote = string.IsNullOrWhiteSpace(remark)
             ? soReference
-            : $"{soReference}\n{so.DeliveryNoteText}";
+            : $"{soReference} - {remark}";
+
+        var trackingNote = string.IsNullOrWhiteSpace(so.TrackingNote) ? null : so.TrackingNote;
+
+        var deliveryNoteText = string.IsNullOrWhiteSpace(so.DeliveryNoteText)
+            ? null
+            : so.DeliveryNoteText.Trim();
+
+        // JD contact person comes from the order's delivery-contact fields, not the delivery (location)
+        // name. Previously contactPerson.name was set to DeliveryName, so JD showed the location name as
+        // the contact. Each field is normalised to null when blank so it is only sent when filled in.
+        var contactPersonName = string.IsNullOrWhiteSpace(so.DeliveryContactPerson) ? null : so.DeliveryContactPerson.Trim();
+        var contactEmail = string.IsNullOrWhiteSpace(so.DeliveryContactEmail) ? null : so.DeliveryContactEmail.Trim();
+        var contactPhone = string.IsNullOrWhiteSpace(so.DeliveryContactPhone) ? null : so.DeliveryContactPhone.Trim();
 
         var create = new JdRequestOrderCreate
         {
             date = finalDeliveryDate,
-            text = null,
+            text = internalNote,
             SourceOrderNumber = so.OrderNumber,
-            trackingNote = so.TrackingNote,
+            trackingNote = trackingNote,
             deliveryNoteText = deliveryNoteText,
             disableApprovalEmail = false,
             shipmondo = shipmondo,
@@ -183,14 +216,14 @@ public sealed class SalesOrderMapper
             },
             contactPerson = new JdRequestOrderContactPerson
             {
-                name = so.DeliveryName,
+                name = contactPersonName,
                 title = null,
                 department = null,
                 company = null,
                 vat = null,
-                email = so.DeliveryContactEmail,
-                telephoneDirect = so.DeliveryContactPhone,
-                telephoneMobile = so.DeliveryContactPhone
+                email = contactEmail,
+                telephoneDirect = contactPhone,
+                telephoneMobile = contactPhone
             },
             files = files?.ToList() ?? new List<JdRequestOrderFileRef>()
         };
