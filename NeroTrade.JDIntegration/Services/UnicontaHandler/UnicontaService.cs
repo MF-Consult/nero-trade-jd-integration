@@ -106,6 +106,28 @@ public sealed class UnicontaService(IUnicontaRepository repo) : IUnicontaService
         return repo.SetPurchaseOrderHeaderFieldsAsync(purchaseNumber, fields, cancellationToken);
     }
 
+    public async IAsyncEnumerable<LocalPurchaseInvoice> ReadPostedPurchaseInvoicesBatchedAsync(int batchSize, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var buffer = new List<LocalPurchaseInvoice>(batchSize);
+        await foreach (var inv in repo.ReadPostedPurchaseInvoicesAsync(cancellationToken))
+        {
+            buffer.Add(inv);
+            if (buffer.Count >= batchSize)
+            {
+                foreach (var item in buffer)
+                    yield return item;
+                buffer.Clear();
+            }
+        }
+        foreach (var item in buffer)
+            yield return item;
+    }
+
+    public Task<bool> SetPurchaseInvoiceHeaderFieldsAsync(int orderNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
+    {
+        return repo.SetPurchaseInvoiceHeaderFieldsAsync(orderNumber, fields, cancellationToken);
+    }
+
     public async IAsyncEnumerable<DebtorDeliveryNoteInfo> ReadDebtorDeliveryNotesAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await foreach (var note in repo.ReadDebtorDeliveryNotesAsync(cancellationToken))

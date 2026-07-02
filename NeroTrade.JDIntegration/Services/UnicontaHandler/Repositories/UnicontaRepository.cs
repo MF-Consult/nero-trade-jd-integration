@@ -421,6 +421,122 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
 
             return true;
         });
+
+    // How far back the posted-invoice safety-net scans. A server-side filter on the invoice Date is
+    // used (not an in-memory scan of everything) for the same two reasons the sales-order query filters
+    // on UpdatedAt: smaller payload, and — critically — the unfiltered Query<T>(null) path opts into
+    // SetCache=true which can return a stale (even empty) session-cached snapshot; a filtered query
+    // takes the SetCache=false path and re-asks the server each tick. Re-sends inside the window are
+    // free because JD dedupes on the "PO {n}" text, so the window errs wide.
+    private static readonly TimeSpan PostedInvoiceRecentWindow = TimeSpan.FromDays(7);
+
+    // Invoice-line group that denotes a physical stock item. JD is a warehouse and only receives real
+    // stock, so fee/charge lines (group "Charges") are skipped — otherwise a non-catalog fee line would
+    // make JD reject the whole shipment.
+    private const string StockLineGroup = "Stock";
+
+    public async IAsyncEnumerable<LocalPurchaseInvoice> ReadPostedPurchaseInvoicesAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var queryApi = await connectionManager.CreateQueryApiAsync();
+
+        // CreditorInvoiceClient.Date is the accounting/posting date (a calendar date in the company's
+        // local time), not a UTC timestamp. We compare against a UTC-derived cutoff, so there is a
+        // sub-day timezone skew — harmless here because the window is deliberately wide (days) and JD
+        // dedupe makes any re-send inside the window free.
+        var cutoff = DateTime.UtcNow.Date - PostedInvoiceRecentWindow;
+        var recentFilter = new[]
+        {
+            PropValuePair.GenereteWhereElements("Date", cutoff, CompareOperator.GreaterThanOrEqual, typeof(DateTime))
+        };
+
+        var invoices = await queryApi.Query<CreditorInvoiceClient>(recentFilter);
+
+        // Opt-in via the same manual flag as the open-order flow (a user still sets "Overfør til JD"
+        // on the booked invoice), never sent yet, and with a usable dedup identity (order number).
+        foreach (var inv in (invoices ?? Enumerable.Empty<CreditorInvoiceClient>())
+                     .Where(i => i != null
+                                 && !i._Deleted
+                                 && i.OrderNumber > 0
+                                 && i.GetUserFieldBoolean(UnicontaUserFields.PurchaseOrderTransferFlag)
+                                 && PurchaseOrderJdStatusValues.IsPending(i.GetUserField(UnicontaUserFields.PurchaseOrderJdStatus) as string)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var invoice = new LocalPurchaseInvoice
+            {
+                PurchaseNumber = inv.OrderNumber,
+                InvoiceNumber = inv.InvoiceNumber,
+                Date = inv.Date,
+                SupplierAccount = inv.Account,
+            };
+
+            var masters = new List<UnicontaBaseEntity> { inv };
+            var lines = await queryApi.Query<CreditorInvoiceLines>(masters, null);
+            foreach (var l in lines ?? Enumerable.Empty<CreditorInvoiceLines>())
+            {
+                // Only physical stock lines go to JD; skip fee/charge lines and blank items.
+                if (string.IsNullOrWhiteSpace(l.Item)) continue;
+                if (!string.Equals(l.Group, StockLineGroup, StringComparison.OrdinalIgnoreCase)) continue;
+
+                invoice.Lines.Add(new LocalPurchaseInvoiceLine
+                {
+                    Sku = l.Item,
+                    Quantity = l.Qty,
+                    IsSubItem = true,
+                    Unit = l.Unit,
+                    CustomerItemNumber = l.GetUserField(UnicontaUserFields.ExternalSku) as string
+                });
+            }
+
+            // A flagged invoice with no stock lines (e.g. a pure fee/charge invoice flagged by mistake)
+            // would otherwise map to a JD shipment with zero lines. Skip it — never send an empty shipment.
+            if (invoice.Lines.Count == 0)
+            {
+                _logger.LogInformation(
+                    "Posted invoice {Invoice} (order {Order}) is flagged for JD but has no stock lines after filtering; skipping.",
+                    inv.InvoiceNumber, inv.OrderNumber);
+                continue;
+            }
+
+            yield return invoice;
+        }
+    }
+
+    public Task<bool> SetPurchaseInvoiceHeaderFieldsAsync(int orderNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
+        => connectionManager.ExecuteWithRetryAsync(async () =>
+        {
+            var queryApi = await connectionManager.CreateQueryApiAsync();
+            var crudApi = await connectionManager.CreateCrudApiAsync();
+
+            var filter = new[] { PropValuePair.GenereteWhereElements("OrderNumber", typeof(int), orderNumber.ToString()) };
+            var invoices = await queryApi.Query<CreditorInvoiceClient>(filter);
+            var matches = (invoices ?? Enumerable.Empty<CreditorInvoiceClient>()).Where(i => i != null && !i._Deleted).ToList();
+
+            if (matches.Count == 0)
+            {
+                _logger.LogWarning("Could not find posted purchase invoice for order {OrderNumber} in Uniconta for header update", orderNumber);
+                return false;
+            }
+
+            // Update every posted invoice for this order so none stays flagged. Best-effort: any
+            // failure is surfaced to the caller, which does not depend on it for idempotency (JD dedup does).
+            var allOk = true;
+            foreach (var inv in matches)
+            {
+                foreach (var (name, value) in fields)
+                    inv.SetUserField(name, value);
+
+                var result = await crudApi.Update(inv);
+                if (result != ErrorCodes.Succes)
+                {
+                    allOk = false;
+                    _logger.LogWarning("Failed to update fields [{Fields}] on posted invoice {Invoice} (order {OrderNumber}). Uniconta Error: {Error}",
+                        string.Join(", ", fields.Keys), inv.InvoiceNumber, orderNumber, result);
+                }
+            }
+
+            return allOk;
+        });
 }
 
 

@@ -37,6 +37,40 @@ public sealed class PurchaseOrderMapper
         }
         return create;
     }
+
+    /// <summary>
+    /// Maps a posted purchase invoice to a JD incoming shipment. Emits the SAME "PO {originatingOrderNumber}"
+    /// identity as <see cref="Map(LocalPurchaseOrder)"/> so JD's existing-shipment dedup treats an order
+    /// already sent via the open-order flow (or an earlier tick) as a duplicate and skips it.
+    /// </summary>
+    public JdIncomingShipmentCreate Map(LocalPurchaseInvoice invoice)
+    {
+        var create = new JdIncomingShipmentCreate
+        {
+            date = DateTime.UtcNow.AddDays(2),
+            text = $"PO {invoice.PurchaseNumber}",
+            SourcePurchaseNumber = invoice.PurchaseNumber,
+            carrier = "TBD",
+            notificationEmails = null,
+            disableApprovalEmail = true,
+            files = []
+        };
+        foreach (var line in invoice.Lines)
+        {
+            if (string.IsNullOrWhiteSpace(line.Sku)) continue;
+            create.lines.Add(new JdIncomingLine
+            {
+                quantity = (int)Math.Round(line.Quantity),
+                isSubItem = line.IsSubItem,
+                externalIdentification = string.IsNullOrWhiteSpace(line.CustomerItemNumber)
+                    ? null
+                    : line.CustomerItemNumber,
+                Sku = line.Sku,
+                unit = line.Unit
+            });
+        }
+        return create;
+    }
 }
 
 
