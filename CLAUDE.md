@@ -105,6 +105,13 @@ CI/CD via GitHub Actions (`.github/workflows/master_nero-trade-data-syncer.yml`)
   last **1 day** (`SalesOrderRecentWindow`). Purchase orders have no time window (all scanned).
 - Nullable reference types are enabled — null-check Uniconta query results carefully
 - All sync functions are `TimerTrigger`-based except `TestGeneratePdf` (HTTP) and `SyncDebtorsToJd` (HTTP)
+- **Sync cadence is config-driven, NOT the `TimerTrigger` cron.** Each sync's `[TimerTrigger(...)]` is
+  only a fast heartbeat; `SyncScheduler` (config: `SyncScheduling`) gates each tick down to a per-job
+  day/night interval and returns before any Uniconta call on non-due ticks. This keeps Uniconta volume
+  under budget (~<4.000 calls/day) and lets ops retune without a redeploy. `MaxSessionAge` in
+  `UnicontaConnectionManager` is likewise day/night-aware (short by day for UI-edit freshness, relaxed
+  at night). **In-memory last-run state assumes a single worker instance** — pin `WEBSITE_MAX_INSTANCES=1`.
+  To change how often a sync runs, edit `SyncScheduling` config — do not touch the heartbeat cron.
 
 ### Monitoring & remediation contract
 

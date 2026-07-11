@@ -6,6 +6,7 @@ using NeroTrade.JDIntegration.Models.ExternalIntegration;
 using NeroTrade.JDIntegration.Models.Settings;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.Logging;
+using NeroTrade.JDIntegration.Services.Scheduling;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
 using System.Text.Json;
 
@@ -15,17 +16,20 @@ public sealed class SyncRequestOrderStatusToUniconta(
     IJdLogisticsService jd,
     IUnicontaService uniconta,
     IOptions<StatusMappingConfig> config,
+    SyncScheduler scheduler,
     IIntegrationLogger integrationLogger,
     ILogger<SyncRequestOrderStatusToUniconta> logger)
 {
     private readonly StatusMappingConfig _config = config.Value;
 
+    // Heartbeat only — the real day/night cadence is enforced by SyncScheduler ("RequestOrderStatus"
+    // cadence in SyncScheduling config). The function is read-heavy (one full JD GetRequestOrders + one
+    // full Uniconta DebtorOrder scan), so a non-due tick returns before any of that work.
     [Function("SyncRequestOrderStatusToUniconta")]
-    // Runs every 5 minutes. The function is read-heavy (one full JD GetRequestOrders + one full
-    // Uniconta DebtorOrder scan); 1-minute cadence was burning quota and Supabase rows for
-    // marginal feedback-latency gain. JD→Uniconta status updates can lag up to 5 min as a result.
-    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    public async Task RunAsync([TimerTrigger("0 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
+        if (!scheduler.TryBeginRun("RequestOrderStatus", DateTime.UtcNow)) return;
+
         await using var run = integrationLogger.BeginRun("SyncRequestOrderStatusToUniconta");
         var logScope = run.Scope;
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });

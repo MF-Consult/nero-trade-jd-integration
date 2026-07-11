@@ -187,6 +187,37 @@ Purchase-order **line** (`CreditorOrderLine`):
 | Item (`InvItem`) | `xExternalSku` | Text (external SKU) |
 | Debtor (`Debtor`) | `Xoverfort` | Checkbox (bool) |
 
+### 4.5 Sync cadence & scaling (`SyncScheduling`)
+
+The five `Sync*` timer functions no longer set their real frequency in the `[TimerTrigger(...)]` cron —
+that cron is only a fast heartbeat (30 s for Sales/PO, 60 s for the rest). The actual per-job day/night
+cadence lives in the `SyncScheduling` config section and is enforced by `SyncScheduler`, which returns
+before any Uniconta call on a non-due tick. This keeps Uniconta volume under the ~4.000 calls/day target
+and lets you retune without a redeploy.
+
+Defaults (see `Models/Settings/SyncSchedulingOptions.cs`) — day window **07–22 local**:
+
+| Job (config key) | Day | Night |
+|---|---|---|
+| `SalesOrders` | 50 s | 5 min |
+| `PurchaseOrders` | 72 s | 30 min |
+| `RequestOrderStatus` | 5 min | 30 min |
+| `Items` | 3 min | 60 min |
+| `ReceivedQuantity` | 15 min | 60 min |
+| Uniconta session max age | 90 s | 15 min |
+
+Config keys (App Settings use `SyncScheduling__…`): `TimeZoneId` (default `Romance Standard Time`),
+`DayStartHour`, `DayEndHour`, `SessionMaxAgeDaySeconds`, `SessionMaxAgeNightSeconds`, and
+`Jobs__<JobName>__DaySeconds` / `Jobs__<JobName>__NightSeconds`.
+
+**Caveats:**
+- **`WEBSITE_TIME_ZONE` is NOT needed** — `SyncScheduler` converts UTC→local itself via `TimeZoneId`,
+  and the heartbeat crons are timezone-agnostic.
+- **Pin to a single instance** (`WEBSITE_MAX_INSTANCES=1` / functionAppScaleLimit=1). Last-run state is
+  in-memory per worker; a scale-out would give each instance its own schedule and multiply the calls.
+- **Effective cadence is quantized to the heartbeat** (30 s → Sales ~60 s, PO ~90 s). Always ≥ the
+  configured value, so always ≤ budget. For exact sub-minute values, lower the heartbeat cron.
+
 ---
 
 ## 5. `integration_logs` schema reference

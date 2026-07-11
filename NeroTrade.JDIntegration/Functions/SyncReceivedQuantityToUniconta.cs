@@ -3,6 +3,7 @@ using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.Logging;
+using NeroTrade.JDIntegration.Services.Scheduling;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
 using System.Text.Json;
@@ -12,12 +13,17 @@ namespace NeroTrade.JDIntegration.Functions;
 public sealed class SyncReceivedQuantityToUniconta(
     IJdLogisticsService jd,
     IUnicontaService uniconta,
+    SyncScheduler scheduler,
     IIntegrationLogger integrationLogger,
     ILogger<SyncReceivedQuantityToUniconta> logger)
 {
+    // Heartbeat only — the real day/night cadence is enforced by SyncScheduler ("ReceivedQuantity"
+    // cadence in SyncScheduling config). Non-due ticks return before any JD/Uniconta call.
     [Function("SyncReceivedQuantityToUniconta")]
-    public async Task RunAsync([TimerTrigger("0 */15 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    public async Task RunAsync([TimerTrigger("0 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
+        if (!scheduler.TryBeginRun("ReceivedQuantity", DateTime.UtcNow)) return;
+
         await using var run = integrationLogger.BeginRun("SyncReceivedQuantityToUniconta");
         var logScope = run.Scope;
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });

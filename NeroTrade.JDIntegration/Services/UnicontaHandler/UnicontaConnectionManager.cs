@@ -1,4 +1,5 @@
 using NeroTrade.JDIntegration.Models.Settings;
+using NeroTrade.JDIntegration.Services.Scheduling;
 
 namespace NeroTrade.JDIntegration.Services.UnicontaHandler;
 
@@ -13,6 +14,7 @@ public sealed class UnicontaConnectionManager : IDisposable
 {
     private readonly ILogger<UnicontaConnectionManager> _logger;
     private readonly UnicontaConfig _config;
+    private readonly SyncScheduler _scheduler;
     private readonly SemaphoreSlim _connectGate = new(1, 1);
     private UnicontaConnection? _connection;
     private Session? _session;
@@ -29,17 +31,20 @@ public sealed class UnicontaConnectionManager : IDisposable
     //     long-lived session return progressively staler views of the Uniconta data — order updates
     //     done in the Uniconta UI weren't visible to our `Query<DebtorOrderClient>(null)` calls
     //     until the next reconnect. SDK decompile confirmed our code path always hits the server,
-    //     so the staleness is per-session server-side. 90 sec caps customer-visible delay to ~2 min
-    //     worst case (one MaxSessionAge cycle + one 30 s polling interval).
-    // Cost: ~40 reconnects/hour per worker instance. Login+OpenCompany is ~500-1000 ms, so the
-    // occasional sales-sync tick that hits a reconnect goes from ~25 ms to ~1 s — still well under
-    // the 30 s timer interval.
-    private static readonly TimeSpan MaxSessionAge = TimeSpan.FromSeconds(90);
+    //     so the staleness is per-session server-side. A short age caps customer-visible delay.
+    // The max age is now day/night-aware via SyncScheduler (config: SyncScheduling.SessionMaxAge*):
+    //  - Day (~90 s): the short cap above matters because users are editing in the Uniconta UI.
+    //  - Night (~15 min): no UI edits happen, so the staleness concern does not apply and we relax
+    //    the age to cut reconnects (each reconnect = one Login + one OpenCompany round-trip).
+    // Cost during the day: ~40 reconnects/hour per worker instance. Login+OpenCompany is ~500-1000 ms,
+    // so the occasional sync tick that hits a reconnect goes from ~25 ms to ~1 s — still well under
+    // the timer interval.
 
-    public UnicontaConnectionManager(ILogger<UnicontaConnectionManager> logger, UnicontaConfig config)
+    public UnicontaConnectionManager(ILogger<UnicontaConnectionManager> logger, UnicontaConfig config, SyncScheduler scheduler)
     {
         _logger = logger;
         _config = config;
+        _scheduler = scheduler;
     }
 
     public async Task<Session> GetSessionAsync()
@@ -57,7 +62,7 @@ public sealed class UnicontaConnectionManager : IDisposable
     public bool IsConnected => IsHealthy;
 
     private bool IsHealthy => _isLoggedIn && _session != null && _company != null;
-    private bool IsFresh => DateTime.UtcNow - _connectedAtUtc <= MaxSessionAge;
+    private bool IsFresh => DateTime.UtcNow - _connectedAtUtc <= _scheduler.GetSessionMaxAge(DateTime.UtcNow);
 
     private async Task EnsureConnectedAsync()
     {
@@ -75,7 +80,7 @@ public sealed class UnicontaConnectionManager : IDisposable
 
             if (IsHealthy)
             {
-                _logger.LogInformation("Uniconta session is older than {Age}, reconnecting proactively", MaxSessionAge);
+                _logger.LogInformation("Uniconta session is older than {Age}, reconnecting proactively", _scheduler.GetSessionMaxAge(DateTime.UtcNow));
                 ResetConnection();
             }
 

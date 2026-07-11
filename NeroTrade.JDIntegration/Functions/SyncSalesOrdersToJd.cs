@@ -7,6 +7,7 @@ using NeroTrade.JDIntegration.Models.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.Logging;
 using NeroTrade.JDIntegration.Services.PdfGeneration;
+using NeroTrade.JDIntegration.Services.Scheduling;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
@@ -19,6 +20,7 @@ public sealed class SyncSalesOrdersToJd(
     IUnicontaService uniconta,
     SalesOrderMapper mapper,
     IDeliveryNotePdfService pdfService,
+    SyncScheduler scheduler,
     IIntegrationLogger integrationLogger,
     ILogger<SyncSalesOrdersToJd> logger)
 {
@@ -30,9 +32,13 @@ public sealed class SyncSalesOrdersToJd(
     // Skip (not queue) when the lock is held: queuing just amplifies the same race.
     private static readonly SemaphoreSlim RunLock = new(1, 1);
 
+    // Heartbeat only — the real day/night cadence is enforced by SyncScheduler ("SalesOrders" cadence
+    // in SyncScheduling config). Non-due ticks return before RunLock and before any Uniconta call.
     [Function("SyncSalesOrdersToJd")]
-    public async Task RunAsync([TimerTrigger("0 */1 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    public async Task RunAsync([TimerTrigger("*/30 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
+        if (!scheduler.TryBeginRun("SalesOrders", DateTime.UtcNow)) return;
+
         if (!await RunLock.WaitAsync(0, cancellationToken))
         {
             logger.LogInformation("SyncSalesOrdersToJd skipped — previous run still in progress");

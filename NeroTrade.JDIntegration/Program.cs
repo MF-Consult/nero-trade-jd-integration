@@ -12,6 +12,7 @@ using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
 using NeroTrade.JDIntegration.Services.ExternalIntegration.Repositories;
 using NeroTrade.JDIntegration.Services.PdfGeneration;
 using NeroTrade.JDIntegration.Services.Logging;
+using NeroTrade.JDIntegration.Services.Scheduling;
 
 var builder = FunctionsApplication.CreateBuilder(args);
 
@@ -25,6 +26,12 @@ builder.Services.AddSingleton(sp => sp.GetRequiredService<Microsoft.Extensions.O
 
 // Status Mapping Config
 builder.Services.Configure<StatusMappingConfig>(builder.Configuration.GetSection("StatusMapping"));
+
+// Day/night sync scheduling. Bind the options, then register the scheduler that gates each sync
+// function's heartbeat down to the configured per-job cadence (and picks the day/night session age).
+builder.Services.Configure<SyncSchedulingOptions>(builder.Configuration.GetSection(SyncSchedulingOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<SyncSchedulingOptions>>().Value);
+builder.Services.AddSingleton<SyncScheduler>();
 
 // Supabase integration logging
 builder.Services.Configure<SupabaseOptions>(builder.Configuration.GetSection("Supabase"));
