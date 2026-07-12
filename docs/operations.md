@@ -201,6 +201,7 @@ Defaults (see `Models/Settings/SyncSchedulingOptions.cs`) — day window **07–
 |---|---|---|
 | `SalesOrders` | 50 s | 5 min |
 | `PurchaseOrders` | 72 s | 30 min |
+| `PostedPurchaseInvoices` | 5 min | 30 min |
 | `RequestOrderStatus` | 5 min | 30 min |
 | `Items` | 3 min | 60 min |
 | `ReceivedQuantity` | 15 min | 60 min |

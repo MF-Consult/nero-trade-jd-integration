@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Models.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
 using NeroTrade.JDIntegration.Services.Logging;
+using NeroTrade.JDIntegration.Services.Scheduling;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
 using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
@@ -26,12 +27,17 @@ public sealed class SyncPostedPurchaseInvoicesToJd(
     IUnicontaService uniconta,
     PurchaseOrderMapper mapper,
     IJdLogisticsService jd,
+    SyncScheduler scheduler,
     IIntegrationLogger integrationLogger,
     ILogger<SyncPostedPurchaseInvoicesToJd> logger)
 {
+    // Heartbeat only — the real day/night cadence is enforced by SyncScheduler ("PostedPurchaseInvoices"
+    // cadence in SyncScheduling config). Non-due ticks return before any Uniconta call.
     [Function("SyncPostedPurchaseInvoicesToJd")]
-    public async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    public async Task RunAsync([TimerTrigger("0 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
     {
+        if (!scheduler.TryBeginRun("PostedPurchaseInvoices", DateTime.UtcNow)) return;
+
         await using var run = integrationLogger.BeginRun("SyncPostedPurchaseInvoicesToJd");
         var logScope = run.Scope;
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = logScope.CorrelationId });

@@ -45,6 +45,7 @@ public sealed class SyncSchedulingOptions
     {
         ["SalesOrders"] = new JobCadence { DaySeconds = 50, NightSeconds = 300 },
         ["PurchaseOrders"] = new JobCadence { DaySeconds = 72, NightSeconds = 1800 },
+        ["PostedPurchaseInvoices"] = new JobCadence { DaySeconds = 300, NightSeconds = 1800 },
         ["RequestOrderStatus"] = new JobCadence { DaySeconds = 300, NightSeconds = 1800 },
         ["Items"] = new JobCadence { DaySeconds = 180, NightSeconds = 3600 },
         ["ReceivedQuantity"] = new JobCadence { DaySeconds = 900, NightSeconds = 3600 },
