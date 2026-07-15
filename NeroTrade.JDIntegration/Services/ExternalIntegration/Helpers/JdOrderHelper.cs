@@ -6,27 +6,37 @@ namespace NeroTrade.JDIntegration.Services.ExternalIntegration;
 public static class JdOrderHelper
 {
     // Regex to extract Order Number from "SO {OrderNumber} - {Remark}"
-    // Matches "SO 12345", "so 12345", etc.
+    // Matches "SO 12345", "so 12345", etc. Used for the legacy text/deliveryNoteText fields where the
+    // key LED the field, so the leftmost match wins.
     private static readonly Regex OrderNumberRegex = new(@"SO\s+(\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // Regex to extract the "SO {n}" key that SalesOrderMapper APPENDS to trackingNote as
+    // "{Sporingsnote} / SO {n}" (or bare "SO {n}"). It is anchored to the END and requires the key to be
+    // either at the string start or preceded by our exact " / " separator, so a stray "SO …" embedded in
+    // a free-text Sporingsnote (e.g. "ref til SO 9999") does NOT false-match — only the key we appended.
+    private static readonly Regex TrackingNoteOrderNumberRegex = new(@"(?:^|\s/\s)SO\s+(\d+)\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // Regex to extract Purchase Order Number from "PO {OrderNumber}"
     private static readonly Regex PurchaseOrderNumberRegex = new(@"PO\s+(\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>
-    /// Extracts the order number as a string from shopOrderId, the text field, or (fallback) deliveryNoteText.
-    /// Prioritizes shopOrderId, then text, then deliveryNoteText. Outgoing orders lead the "SO {n}" machine
-    /// key on <c>text</c> ("Intern Note"); the deliveryNoteText fallback covers legacy orders that carried
-    /// the key on the delivery-note text. <c>trackingNote</c> is deliberately NOT parsed — it holds the free
-    /// Sporingsnote, which could itself contain a stray "SO …".
+    /// Extracts the order number as a string from shopOrderId, trackingNote, the text field, or (fallback)
+    /// deliveryNoteText. Priority: shopOrderId → trackingNote → text → deliveryNoteText. Current outgoing
+    /// orders append the "SO {n}" machine key to <c>trackingNote</c> ("{Sporingsnote} / SO {n}"); the text
+    /// fallback covers legacy orders that led the key on <c>text</c> ("Intern Note"), and deliveryNoteText
+    /// covers even older orders that carried it on the delivery-note text. The trackingNote match is
+    /// end-anchored so a stray "SO …" inside a free Sporingsnote is ignored.
     /// </summary>
-    public static string? GetOrderNumberString(string? shopOrderId, string? text, string? deliveryNoteText = null)
+    public static string? GetOrderNumberString(string? shopOrderId, string? trackingNote, string? text, string? deliveryNoteText = null)
     {
         if (!string.IsNullOrWhiteSpace(shopOrderId))
         {
             return shopOrderId!.Trim();
         }
 
-        return MatchOrderNumber(text) ?? MatchOrderNumber(deliveryNoteText);
+        return MatchTrackingNoteOrderNumber(trackingNote)
+            ?? MatchOrderNumber(text)
+            ?? MatchOrderNumber(deliveryNoteText);
     }
 
     private static string? MatchOrderNumber(string? value)
@@ -40,13 +50,24 @@ public static class JdOrderHelper
         return match.Success ? match.Groups[1].Value.Trim() : null;
     }
 
-    /// <summary>
-    /// Extracts the order number as an int from shopOrderId, the text field, or (fallback) deliveryNoteText.
-    /// Returns 0 if parsing fails. See <see cref="GetOrderNumberString"/> for the lookup priority.
-    /// </summary>
-    public static int GetOrderNumber(string? shopOrderId, string? text, string? deliveryNoteText = null)
+    private static string? MatchTrackingNoteOrderNumber(string? value)
     {
-        var str = GetOrderNumberString(shopOrderId, text, deliveryNoteText);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var match = TrackingNoteOrderNumberRegex.Match(value);
+        return match.Success ? match.Groups[1].Value.Trim() : null;
+    }
+
+    /// <summary>
+    /// Extracts the order number as an int from shopOrderId, trackingNote, the text field, or (fallback)
+    /// deliveryNoteText. Returns 0 if parsing fails. See <see cref="GetOrderNumberString"/> for the lookup priority.
+    /// </summary>
+    public static int GetOrderNumber(string? shopOrderId, string? trackingNote, string? text, string? deliveryNoteText = null)
+    {
+        var str = GetOrderNumberString(shopOrderId, trackingNote, text, deliveryNoteText);
         if (int.TryParse(str, out var val))
         {
             return val;

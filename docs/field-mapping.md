@@ -36,8 +36,8 @@
 | JD field (Til) | Uniconta source (Fra) — UI label / field | `LocalSalesOrder` | Transform rule |
 |---|---|---|---|
 | `date` | **Leveringsdato** (`_DeliveryDate`) + **Tidspunkt for Levering** (`xTimeForDelivery`) | `DeliveryDate` (+ `DeliveryTime`) | Date always from Leveringsdato. **Only** when `DeliveryTime` set **and** product supports `TIMED_DELIVERY`: `finalDate = Leveringsdato.Date + DeliveryTime.TimeOfDay` (date part of xTimeForDelivery is discarded). Else date only. If Leveringsdato is empty, `date` ends up `null`. |
-| `text` | **Bemærkning til JD** (`xRemarksForJD`) | `RemarkText` | `"SO {OrderNumber}"` if remark blank; else `"SO {n} - {remark}"` (remark trimmed). The `SO {n}` key **always leads**. |
-| `trackingNote` | **Sporingsnote** (`xTrackingNote`) | `TrackingNote` | Raw; blank → `null`. Own dedicated JD field. |
+| `text` | **Bemærkning til JD** (`xRemarksForJD`) | `RemarkText` | The remark **only** (trimmed); blank → `null`. The `SO {n}` key is **no longer written here** — it moved to `trackingNote` (2026-07-15). |
+| `trackingNote` | **Sporingsnote** (`xTrackingNote`) + **Ordrenr.** (`OrderNumber`) | `TrackingNote` (+ `OrderNumber`) | `"{Sporingsnote} / SO {n}"`, or bare `"SO {n}"` when Sporingsnote blank. **JD caps this field at 30 chars** (it is the shipping label) — the Sporingsnote is trimmed as needed so the appended `SO {n}` key is **never truncated**. This is the machine key `JdOrderHelper` parses back out (end-anchored) for dedup/status sync. |
 | `deliveryNoteText` | **Note på følgeseddel** (`xTrackingNoteOnLabel`) | `DeliveryNoteText` | Trimmed; blank → `null`. **Label text only — never contains the SO number.** |
 | `disableApprovalEmail` | — | — | Always `false`. |
 | `address.name` | **Leveringsnavn** (`_DeliveryName`, fallback debtor `_Name`) | `DeliveryName` | Location/company name. |
@@ -117,8 +117,10 @@ All write-backs go through `UnicontaService` and are **skipped under DryRun** (s
 
 ## 4. Core rules — ALWAYS enforced
 
-1. **`SO {n}` / `PO {n}` always leads `text`.** It is a machine key parsed back out by `JdOrderHelper` (dedup, status sync, received-quantity matching). The remark may only ever be appended after `" - "`. Leftmost match wins.
-2. **Each Uniconta note lands in its own JD field** — never merge: Bemærkning→`text`, Sporingsnote→`trackingNote`, Note på følgeseddel→`deliveryNoteText`.
+1. **The `SO {n}` / `PO {n}` machine key is parsed back out by `JdOrderHelper`** (dedup, status sync, received-quantity matching).
+   - **Sales orders:** `SO {n}` is **appended to `trackingNote`** as `"{Sporingsnote} / SO {n}"` and read **end-anchored** (only at string-start or after our exact `" / "` separator), so a stray `SO …` inside a free Sporingsnote is ignored. Read priority is `shopOrderId → trackingNote → text → deliveryNoteText`; the `text`/`deliveryNoteText` fallbacks match **legacy** orders whose key led `text` (or the delivery-note text), so in-flight orders are not re-sent as "new".
+   - **Purchase orders:** `PO {n}` still **leads `text`** (`"PO {n} - {remark}"`); the remark may only ever be appended after `" - "`, leftmost match wins.
+2. **Each Uniconta note lands in its own JD field**: Bemærkning→`text`, Sporingsnote→`trackingNote`, Note på følgeseddel→`deliveryNoteText`. The **only** deliberate merge is the sales-order `SO {n}` machine key, appended to `trackingNote` after the Sporingsnote (rule 1) — it needs a home now that it no longer sits on `text`.
 3. **Blank text fields are sent as `null`**, not empty string.
 4. **Internal resolution keys never reach the payload.** Request-order product lines carry only `quantity` + `catalog.sku` (no `unit`/`id`/internal Sku). Incoming-shipment lines: `unit`/`id`/`Sku` are `[JsonIgnore]` and resolved in-memory before serialisation.
 5. **DryRun (`JD__DryRun`) mutates nothing** — neither JD (every mutating call intercepted in `JdRepository.SendWithRetryAsync`) nor Uniconta (every mutating method in `UnicontaService` short-circuits). See [operations.md §10](operations.md).
@@ -129,6 +131,7 @@ All write-backs go through `UnicontaService` and are **skipped under DryRun** (s
 
 Add a dated entry for **every** mapping change. Newest first.
 
+- **2026-07-15** — Sales-order `SO {n}` machine key **moved off `text` onto `trackingNote`**, appended after the Sporingsnote as `"{Sporingsnote} / SO {n}"` (bare `"SO {n}"` when the Sporingsnote is blank). `text` now carries the `xRemarksForJD` remark **only** (blank → `null`). The Sporingsnote is trimmed as needed to keep the key whole within JD's **30-char `trackingNote` cap** (verified against the JD swagger: "Max: 30 Chars … Shipping Label") — a silent truncation of the key would break dedup. `JdOrderHelper.GetOrderNumberString`/`GetOrderNumber` gained a `trackingNote` parameter and parse it **first** (end-anchored), falling back to `text` then `deliveryNoteText` so already-sent (in-flight) orders keyed on `text` still match and are **not** re-sent. Dedup (`JdLogisticsService.UpsertRequestOrdersAsync`), status sync (`SyncRequestOrderStatusToUniconta`), and the delete/get sales-order admin endpoints all updated to pass `trackingNote`. Purchase-order path (`PO {n}` on `text`) unchanged. Source field for the number is the Uniconta SDK's `DebtorOrderClient.OrderNumber`.
 - **2026-06-17** — Sales-order `contactPerson.name` now sourced from `DeliveryContactPerson` (was `DeliveryName`, which wrongly put the location name in JD's contact field). `contactPerson.email`/`telephone*` normalised to `null` when blank. (`DeliveryContactEmail`→email, `DeliveryPhone`→phone unchanged.)
 - **2026-06-17** — Sales-order eligibility window widened 30 min → 1 day (`SalesOrderRecentWindow`); orders flagged the previous day are now picked up.
 - **(pre-existing)** — Initial sales-order + purchase-order mappings, carrier mapping incl. EGS reroute for DK zip > 4999, opt-in `PL_EXCHANGE` via `xByttepaller`, `TIMED_DELIVERY` via `xTimeForDelivery`, Lagerhotel container parent/child via `xEnhedstype`/`xAntalEnheder`.

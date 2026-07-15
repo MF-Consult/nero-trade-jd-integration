@@ -170,19 +170,20 @@ public sealed class SalesOrderMapper
         var (countryCode, countryName) = CountryHelper.GetCountryInfo(so.DeliveryCountryCode);
 
         // JD request-order field mapping — each Uniconta note lands in its own JD field:
-        //   text             → "Intern Note": the "SO {n}" machine key, plus the xRemarksForJD remark
-        //                      ("Bemærkning til JD") after a " - " separator. JdOrderHelper reads the
-        //                      key back from text; it leads, so the leftmost match wins even if the
-        //                      remark mentions another SO. The UC number is NOT on the følgeseddel.
-        //   trackingNote     → xTrackingNote (Sporingsnote) — its own dedicated JD field.
+        //   text             → "Intern Note": the xRemarksForJD remark ("Bemærkning til JD") ONLY.
+        //                      The "SO {n}" machine key is NO LONGER written here — it moved to
+        //                      trackingNote (see below). Blank remark → null.
+        //   trackingNote     → xTrackingNote (Sporingsnote) with the "SO {n}" key appended:
+        //                      "{Sporingsnote} / SO {n}", or just "SO {n}" when the Sporingsnote is
+        //                      blank. This is the field JdOrderHelper now parses the key back out of for
+        //                      dedup/status sync. JD caps trackingNote at 30 chars (it is the shipping
+        //                      label), so the Sporingsnote is trimmed as needed to guarantee the key is
+        //                      never truncated — a silent truncation would break matching.
         //   deliveryNoteText → "Note på følgeseddel" (xTrackingNoteOnLabel) — label text only.
-        var soReference = $"SO {so.OrderNumber}";
         var remark = so.RemarkText?.Trim();
-        var internalNote = string.IsNullOrWhiteSpace(remark)
-            ? soReference
-            : $"{soReference} - {remark}";
+        var internalNote = string.IsNullOrWhiteSpace(remark) ? null : remark;
 
-        var trackingNote = string.IsNullOrWhiteSpace(so.TrackingNote) ? null : so.TrackingNote;
+        var trackingNote = BuildTrackingNoteWithSoKey(so.TrackingNote, so.OrderNumber);
 
         var deliveryNoteText = string.IsNullOrWhiteSpace(so.DeliveryNoteText)
             ? null
@@ -242,6 +243,44 @@ public sealed class SalesOrderMapper
         }
 
         return create;
+    }
+
+    // JD caps trackingNote (the shipping label) at 30 chars. The "SO {n}" key MUST survive within that
+    // budget because JdOrderHelper parses it back out of trackingNote for dedup/status sync — a silent
+    // truncation of the key would break matching and re-send the order as "new".
+    private const int JdTrackingNoteMaxLength = 30;
+
+    /// <summary>
+    /// Appends the "SO {orderNumber}" machine key to the Sporingsnote as "{Sporingsnote} / SO {n}"
+    /// (or just "SO {n}" when the Sporingsnote is blank), trimming the Sporingsnote as needed so the
+    /// whole string fits JD's 30-char trackingNote limit while the key is always kept whole.
+    /// </summary>
+    internal static string BuildTrackingNoteWithSoKey(string? sporingsnote, int orderNumber)
+    {
+        var soKey = $"SO {orderNumber}";
+        var existing = sporingsnote?.Trim();
+
+        if (string.IsNullOrWhiteSpace(existing))
+        {
+            // Order numbers are far under the 30-char budget, so the bare key always fits.
+            return soKey;
+        }
+
+        const string separator = " / ";
+        var budgetForExisting = JdTrackingNoteMaxLength - separator.Length - soKey.Length;
+
+        if (budgetForExisting <= 0)
+        {
+            // Degenerate (implausibly long order number): the key wins the whole field.
+            return soKey;
+        }
+
+        if (existing!.Length > budgetForExisting)
+        {
+            existing = existing[..budgetForExisting].TrimEnd();
+        }
+
+        return $"{existing}{separator}{soKey}";
     }
 
     private static bool IsDanishZipAboveGlimoeThreshold(string? deliveryZip, string? countryCode)

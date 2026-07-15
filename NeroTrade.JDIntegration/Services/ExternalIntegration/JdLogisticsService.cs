@@ -244,16 +244,18 @@ public sealed class JdLogisticsService(
 
     public async Task<UpsertResult<JdRequestOrderCreate>> UpsertRequestOrdersAsync(long inventoryId, IEnumerable<JdRequestOrderCreate> orders, CancellationToken cancellationToken)
     {
-        // Build existing map keyed by shop order identifier. The "SO {n}" reference leads the text
-        // field ("Intern Note") on outgoing orders; JdOrderHelper falls back to deliveryNoteText so
-        // legacy orders (key on the delivery-note text) keep matching.
+        // Build existing map keyed by shop order identifier. Current outgoing orders append the "SO {n}"
+        // reference to trackingNote ("{Sporingsnote} / SO {n}"); JdOrderHelper falls back to text and then
+        // deliveryNoteText so legacy orders (key led on text, or older still on the delivery-note text)
+        // keep matching. This transitional fallback is what stops already-sent orders — whose key still
+        // sits in text — from being seen as "new" and re-created after the write side moves to trackingNote.
         // Exclude cancelled (Annulleret) orders from the dedup map. JD does not hard-remove a cancelled
         // request order (DELETE returns 204 but it lingers in the list), so a dead cancelled order must
         // not match an incoming sales order — otherwise the re-upload is skipped, or tries to "recreate"
         // the un-removable order. Treating cancelled as absent lets a fresh order be created.
         var existing = (await repository.GetRequestOrdersAsync(inventoryId, cancellationToken))
             .Where(r => r.status != JdRequestOrderStatus.Cancelled)
-            .Select(r => new { Order = r, Key = JdOrderHelper.GetOrderNumberString(r.shopOrderId, r.text, r.deliveryNoteText) })
+            .Select(r => new { Order = r, Key = JdOrderHelper.GetOrderNumberString(r.shopOrderId, r.trackingNote, r.text, r.deliveryNoteText) })
             .Where(x => !string.IsNullOrWhiteSpace(x.Key))
             .GroupBy(x => x.Key!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First().Order, StringComparer.OrdinalIgnoreCase);
@@ -261,7 +263,7 @@ public sealed class JdLogisticsService(
         var result = new UpsertResult<JdRequestOrderCreate>();
         foreach (var order in orders)
         {
-            var key = JdOrderHelper.GetOrderNumberString(order.shopOrderId, order.text, order.deliveryNoteText);
+            var key = JdOrderHelper.GetOrderNumberString(order.shopOrderId, order.trackingNote, order.text, order.deliveryNoteText);
             if (string.IsNullOrWhiteSpace(key))
             {
                 result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, 0, "Missing shop order identifier"));

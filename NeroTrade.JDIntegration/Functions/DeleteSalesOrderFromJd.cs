@@ -54,7 +54,7 @@ public sealed class DeleteSalesOrderFromJd(
             var matches = orders
                 .Where(o => o.id.HasValue &&
                             string.Equals(
-                                JdOrderHelper.GetOrderNumberString(o.shopOrderId, o.text, o.deliveryNoteText),
+                                JdOrderHelper.GetOrderNumberString(o.shopOrderId, o.trackingNote, o.text, o.deliveryNoteText),
                                 target,
                                 StringComparison.OrdinalIgnoreCase))
                 .ToList();

@@ -8,15 +8,17 @@ namespace NeroTrade.JDIntegration.Tests;
 
 /// <summary>
 /// Pins the sales-order note routing — each Uniconta note lands in its own JD field:
-/// <c>text</c> ("Intern Note") = "SO {n}" + the xRemarksForJD remark after " - ";
-/// <c>trackingNote</c> = xTrackingNote (Sporingsnote), its own field;
+/// <c>text</c> ("Intern Note") = the xRemarksForJD remark ONLY (blank → null);
+/// <c>trackingNote</c> = xTrackingNote (Sporingsnote) with the "SO {n}" machine key appended as
+/// "{Sporingsnote} / SO {n}" (bare "SO {n}" when the Sporingsnote is blank), trimmed to fit JD's
+/// 30-char trackingNote cap so the key is never truncated;
 /// <c>deliveryNoteText</c> ("Note på følgeseddel") = label text only (no UC order number).
-/// JdOrderHelper reads the "SO {n}" key back from text (leading, so the leftmost match wins).
+/// JdOrderHelper reads the "SO {n}" key back from trackingNote (end-anchored), then text (legacy).
 /// </summary>
 public class SalesOrderMapperTests
 {
     [Fact]
-    public void Map_PutsSoKeyAndRemarkInText_DashSeparated()
+    public void Map_PutsRemarkInText_AndSoKeyInTrackingNote_WhenNoSporingsnote()
     {
         var so = new LocalSalesOrder
         {
@@ -26,13 +28,13 @@ public class SalesOrderMapperTests
 
         var create = new SalesOrderMapper().Map(so);
 
-        Assert.Equal("SO 2193 - Hej Mikkel, kommer min bemærkning med over?", create.text);
-        Assert.Null(create.trackingNote);
+        Assert.Equal("Hej Mikkel, kommer min bemærkning med over?", create.text); // remark only, no SO key
+        Assert.Equal("SO 2193", create.trackingNote);                             // key on trackingNote
         Assert.Null(create.deliveryNoteText);
     }
 
     [Fact]
-    public void Map_RoutesSporingsnoteToItsOwnTrackingNoteField()
+    public void Map_AppendsSoKeyToSporingsnote_AndTextIsRemarkOnly()
     {
         var so = new LocalSalesOrder
         {
@@ -43,13 +45,14 @@ public class SalesOrderMapperTests
 
         var create = new SalesOrderMapper().Map(so);
 
-        Assert.Equal("SO 2194 - Ring 30 min før", create.text);       // Intern Note
-        Assert.Equal("Quattro Fontane Due", create.trackingNote);     // Sporingsnote, its own field
+        Assert.Equal("Ring 30 min før", create.text);                       // Intern Note = remark only
+        Assert.Equal("Quattro Fontane Due / SO 2194", create.trackingNote); // Sporingsnote + appended key
+        Assert.True(create.trackingNote!.Length <= 30);
         Assert.Null(create.deliveryNoteText);
     }
 
     [Fact]
-    public void Map_WithoutRemark_TextIsJustSoKey_NoDanglingSeparator()
+    public void Map_WithoutRemark_TextIsNull_AndTrackingNoteCarriesKey()
     {
         var so = new LocalSalesOrder
         {
@@ -59,8 +62,8 @@ public class SalesOrderMapperTests
 
         var create = new SalesOrderMapper().Map(so);
 
-        Assert.Equal("SO 2195", create.text);
-        Assert.Equal("Quattro Fontane Due", create.trackingNote);
+        Assert.Null(create.text);
+        Assert.Equal("Quattro Fontane Due / SO 2195", create.trackingNote);
         Assert.Null(create.deliveryNoteText);
     }
 
@@ -77,19 +80,64 @@ public class SalesOrderMapperTests
         var create = new SalesOrderMapper().Map(so);
 
         Assert.Equal("Label-tekst til følgeseddel", create.deliveryNoteText); // no "SO {n}" on the label
-        Assert.Equal("SO 2196 - intern besked", create.text);
+        Assert.Equal("intern besked", create.text);                           // remark only
+        Assert.Equal("SO 2196", create.trackingNote);                         // key on trackingNote
     }
 
     [Fact]
-    public void Map_Text_RoundTripsThroughOrderNumberParsing()
+    public void Map_TrackingNote_RoundTripsThroughOrderNumberParsing_EvenWhenRemarkMentionsAnotherSo()
     {
         var so = new LocalSalesOrder { OrderNumber = 2197, RemarkText = "vedrører SO 9999" };
 
         var create = new SalesOrderMapper().Map(so);
 
-        // The key leads text, so the leftmost regex match wins even though the remark in the same
-        // field mentions another SO (9999). Identification reads text (then deliveryNoteText fallback).
-        Assert.Equal(2197, JdOrderHelper.GetOrderNumber(create.shopOrderId, create.text, create.deliveryNoteText));
+        // The key now lives (end-anchored) on trackingNote, so identification is unaffected by the stray
+        // "SO 9999" the remark leaves on text. Read priority: trackingNote → text → deliveryNoteText.
+        Assert.Equal(2197, JdOrderHelper.GetOrderNumber(
+            create.shopOrderId, create.trackingNote, create.text, create.deliveryNoteText));
+    }
+
+    [Fact]
+    public void Map_TruncatesSporingsnote_ButNeverTheSoKey_WhenOver30Chars()
+    {
+        var so = new LocalSalesOrder
+        {
+            OrderNumber = 2198,
+            TrackingNote = "Quattro Fontane Due Milano Centrale" // 35 chars — would overflow the 30-char cap
+        };
+
+        var create = new SalesOrderMapper().Map(so);
+
+        Assert.True(create.trackingNote!.Length <= 30, $"trackingNote was {create.trackingNote.Length} chars");
+        Assert.EndsWith("SO 2198", create.trackingNote); // key survives whole at the tail
+        // And it still round-trips: the SO number is recoverable despite the truncation.
+        Assert.Equal(2198, JdOrderHelper.GetOrderNumber(
+            create.shopOrderId, create.trackingNote, create.text, create.deliveryNoteText));
+    }
+
+    [Fact]
+    public void GetOrderNumber_FallsBackToText_ForLegacyOrders_WhoseKeyStillLeadsText()
+    {
+        // In-flight orders created before this change: key led text, trackingNote was the raw Sporingsnote
+        // (no appended key). The text fallback must still match them so they are NOT re-sent as "new".
+        Assert.Equal(2100, JdOrderHelper.GetOrderNumber(
+            shopOrderId: null,
+            trackingNote: "Quattro Fontane Due",   // legacy raw Sporingsnote, no "SO {n}"
+            text: "SO 2100 - Ring 30 min før",     // legacy: key leads text
+            deliveryNoteText: null));
+    }
+
+    [Fact]
+    public void GetOrderNumber_IgnoresStraySoInsideFreeSporingsnote_ForLegacyOrders()
+    {
+        // A legacy order whose raw Sporingsnote happens to contain a stray "SO 9999" must NOT be keyed off
+        // it — the end-anchored trackingNote regex requires the key at string-start or after our " / "
+        // separator, so this falls through to the real key on text.
+        Assert.Equal(2101, JdOrderHelper.GetOrderNumber(
+            shopOrderId: null,
+            trackingNote: "ref til SO 9999",       // stray, mid-string, not our appended form
+            text: "SO 2101",
+            deliveryNoteText: null));
     }
 
     // --- PL_EXCHANGE (byttepaller) is opt-in per order via xByttepaller / LocalSalesOrder.ExchangePallets ---

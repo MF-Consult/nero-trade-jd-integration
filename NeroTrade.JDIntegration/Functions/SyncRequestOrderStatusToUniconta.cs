@@ -85,7 +85,7 @@ public sealed class SyncRequestOrderStatusToUniconta(
             // current order's status rather than a stale cancelled one.
             var ordersByNumber = jdOrders
                 .Where(o => o.status != null)
-                .Select(o => new { Order = o, OrderNumber = JdOrderHelper.GetOrderNumber(o.shopOrderId, o.text, o.deliveryNoteText) })
+                .Select(o => new { Order = o, OrderNumber = JdOrderHelper.GetOrderNumber(o.shopOrderId, o.trackingNote, o.text, o.deliveryNoteText) })
                 .Where(x => x.OrderNumber != 0)
                 .GroupBy(x => x.OrderNumber);
 
