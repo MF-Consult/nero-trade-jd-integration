@@ -62,45 +62,64 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         foreach (var o in (orders ?? Enumerable.Empty<CreditorOrderClient>()).Where(o => o != null && o.GetUserFieldBoolean(UnicontaUserFields.PurchaseOrderTransferFlag) && PurchaseOrderJdStatusValues.IsPending(o.GetUserField(UnicontaUserFields.PurchaseOrderJdStatus) as string)))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var po = new LocalPurchaseOrder
-            {
-                PurchaseNumber = o.OrderNumber,
-                Date = o._Created,
-                SupplierAccount = o.Account,
-                OurRef = o._OurRef,
-                YourRef = o._YourRef,
-                Requisition = o._Requisition,
-                DeliveryName = o._DeliveryName,
-                DeliveryAddress1 = o._DeliveryAddress1,
-                DeliveryAddress2 = o._DeliveryAddress2,
-                DeliveryAddress3 = o._DeliveryAddress3,
-                DeliveryZip = o._DeliveryZipCode,
-                DeliveryCity = o._DeliveryCity,
-                DeliveryCountryCode = o._DeliveryCountry == 0 ? "DK" : o._DeliveryCountry.ToString(),
-                DeliveryDate = o._DeliveryDate == default ? (DateTime?)null : o._DeliveryDate,
-                Carrier = o.GetUserField(UnicontaUserFields.PurchaseOrderCarrier) as string,
-                RemarkText = o.GetUserField(UnicontaUserFields.PurchaseOrderRemark) as string,
-                ContainerType = o.GetUserField(UnicontaUserFields.PurchaseOrderContainerType) as string,
-                // Numeric user fields come back boxed; Convert handles double/int/string without throwing.
-                ContainerCount = ToNullableDouble(o.GetUserField(UnicontaUserFields.PurchaseOrderContainerCount)),
-            };
-
-            // Fetch detail lines using Master/Detail query to ensure lines are loaded
-            var masters = new List<UnicontaBaseEntity> { o };
-            var lines = await queryApi.Query<CreditorOrderLineClient>(masters, null);
-            foreach (var l in lines ?? Enumerable.Empty<CreditorOrderLineClient>())
-            {
-                po.Lines.Add(new LocalPurchaseOrderLine
-                {
-                    Sku = l._Item,
-                    Quantity = l._Qty,
-                    Unit = l.Unit,
-                    CustomerItemNumber = l.GetUserField(UnicontaUserFields.ExternalSku) as string
-                });
-            }
-
-            yield return po;
+            // Fetch detail lines using Master/Detail query to ensure lines are loaded.
+            var lines = await queryApi.Query<CreditorOrderLineClient>(new List<UnicontaBaseEntity> { o }, null);
+            yield return ProjectPurchaseOrder(o, lines);
         }
+    }
+
+    // Inspection: fetch ONE open purchase order by number, ignoring the transfer-flag/JD-status eligibility
+    // the sync path enforces. Returns null when there is no open order with that number (it may be booked —
+    // see ReadPostedPurchaseInvoiceByNumberAsync). Shares ProjectPurchaseOrder with the sync path so the
+    // projected LocalPurchaseOrder is identical to what the sync would see.
+    public async Task<LocalPurchaseOrder?> ReadPurchaseOrderByNumberAsync(int purchaseNumber, CancellationToken cancellationToken)
+    {
+        var queryApi = await connectionManager.CreateQueryApiAsync();
+        var filter = new[] { PropValuePair.GenereteWhereElements(nameof(CreditorOrderClient.OrderNumber), purchaseNumber, CompareOperator.Equal, typeof(int)) };
+        var orders = await queryApi.Query<CreditorOrderClient>(filter);
+        var o = (orders ?? Enumerable.Empty<CreditorOrderClient>()).FirstOrDefault(x => x != null && x.OrderNumber == purchaseNumber);
+        if (o == null) return null;
+        var lines = await queryApi.Query<CreditorOrderLineClient>(new List<UnicontaBaseEntity> { o }, null);
+        return ProjectPurchaseOrder(o, lines);
+    }
+
+    private static LocalPurchaseOrder ProjectPurchaseOrder(CreditorOrderClient o, IEnumerable<CreditorOrderLineClient>? lines)
+    {
+        var po = new LocalPurchaseOrder
+        {
+            PurchaseNumber = o.OrderNumber,
+            Date = o._Created,
+            SupplierAccount = o.Account,
+            OurRef = o._OurRef,
+            YourRef = o._YourRef,
+            Requisition = o._Requisition,
+            DeliveryName = o._DeliveryName,
+            DeliveryAddress1 = o._DeliveryAddress1,
+            DeliveryAddress2 = o._DeliveryAddress2,
+            DeliveryAddress3 = o._DeliveryAddress3,
+            DeliveryZip = o._DeliveryZipCode,
+            DeliveryCity = o._DeliveryCity,
+            DeliveryCountryCode = o._DeliveryCountry == 0 ? "DK" : o._DeliveryCountry.ToString(),
+            DeliveryDate = o._DeliveryDate == default ? (DateTime?)null : o._DeliveryDate,
+            Carrier = o.GetUserField(UnicontaUserFields.PurchaseOrderCarrier) as string,
+            RemarkText = o.GetUserField(UnicontaUserFields.PurchaseOrderRemark) as string,
+            ContainerType = o.GetUserField(UnicontaUserFields.PurchaseOrderContainerType) as string,
+            // Numeric user fields come back boxed; Convert handles double/int/string without throwing.
+            ContainerCount = ToNullableDouble(o.GetUserField(UnicontaUserFields.PurchaseOrderContainerCount)),
+        };
+
+        foreach (var l in lines ?? Enumerable.Empty<CreditorOrderLineClient>())
+        {
+            po.Lines.Add(new LocalPurchaseOrderLine
+            {
+                Sku = l._Item,
+                Quantity = l._Qty,
+                Unit = l.Unit,
+                CustomerItemNumber = l.GetUserField(UnicontaUserFields.ExternalSku) as string
+            });
+        }
+
+        return po;
     }
 
     // Server-side filter window. Any order whose UpdatedAt is within this window will be returned by
@@ -186,67 +205,104 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
             cancellationToken.ThrowIfCancellationRequested();
 
             debtorsByAccount.TryGetValue(o.Account ?? string.Empty, out var debtor);
+            linesByOrderRowId.TryGetValue(o.RowId, out var lines);
+            yield return ProjectSalesOrder(o, debtor, lines, itemTypeBySku);
+        }
+    }
 
-            var so = new LocalSalesOrder
+    // Inspection: fetch ONE sales order by number, ignoring the transfer-flag/Group eligibility the sync
+    // path enforces. Uses the same ProjectSalesOrder projection as the sync path, so the resulting
+    // LocalSalesOrder (and thus its JD mapping) is what the sync would produce. Master data (debtor,
+    // item types) is looked up targeted for the single order.
+    public async Task<LocalSalesOrder?> ReadSalesOrderByNumberAsync(int orderNumber, CancellationToken cancellationToken)
+    {
+        var queryApi = await connectionManager.CreateQueryApiAsync();
+        var filter = new[] { PropValuePair.GenereteWhereElements(nameof(DebtorOrderClient.OrderNumber), orderNumber, CompareOperator.Equal, typeof(int)) };
+        var orders = await queryApi.Query<DebtorOrderClient>(filter);
+        var o = (orders ?? Enumerable.Empty<DebtorOrderClient>()).FirstOrDefault(x => x != null && x.OrderNumber == orderNumber);
+        if (o == null) return null;
+
+        DebtorClient? debtor = null;
+        if (!string.IsNullOrEmpty(o.Account))
+        {
+            var debtorFilter = new[] { PropValuePair.GenereteWhereElements(nameof(DebtorClient.Account), o.Account, CompareOperator.Equal, typeof(string)) };
+            var debtors = await queryApi.Query<DebtorClient>(debtorFilter);
+            debtor = (debtors ?? Enumerable.Empty<DebtorClient>())
+                .FirstOrDefault(d => d != null && string.Equals(d.Account, o.Account, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var items = await queryApi.Query<InvItemClient>((IEnumerable<PropValuePair>?)null);
+        var itemTypeBySku = (items ?? Enumerable.Empty<InvItemClient>())
+            .Where(i => !string.IsNullOrEmpty(i?.Item))
+            .GroupBy(i => i!.Item!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => (int)g.First()._ItemType, StringComparer.OrdinalIgnoreCase);
+
+        var lines = await queryApi.Query<DebtorOrderLineClient>(new List<UnicontaBaseEntity> { o }, null);
+        return ProjectSalesOrder(o, debtor, lines?.ToList(), itemTypeBySku);
+    }
+
+    private static LocalSalesOrder ProjectSalesOrder(
+        DebtorOrderClient o,
+        DebtorClient? debtor,
+        IReadOnlyList<DebtorOrderLineClient>? lines,
+        IReadOnlyDictionary<string, int> itemTypeBySku)
+    {
+        var so = new LocalSalesOrder
+        {
+            OrderNumber = o.OrderNumber,
+            Date = o._Created,
+            DebtorAccount = o.Account,
+            Comments = o._Remark,
+            DeliveryName = o._DeliveryName ?? debtor?._Name,
+            DeliveryAddress1 = o._DeliveryAddress1 ?? debtor?._Address1,
+            DeliveryAddress2 = o._DeliveryAddress2 ?? debtor?._Address2,
+            DeliveryAddress3 = o._DeliveryAddress3 ?? debtor?._Address3,
+            DeliveryZip = o._DeliveryZipCode ?? debtor?._ZipCode,
+            DeliveryCity = o._DeliveryCity ?? debtor?._City,
+            DeliveryCountryCode = debtor?._Country == 0 ? "DK" : debtor?._Country.ToString(),
+            // Additional fields for JD mapping
+            DeliveryDate = o._DeliveryDate == default ? null : o._DeliveryDate,
+            TrackingNote = o.GetUserField(UnicontaUserFields.TrackingNote) as string,
+            DeliveryNoteText = o.GetUserField(UnicontaUserFields.DeliveryNoteText) as string,
+            RemarkText = o.GetUserField(UnicontaUserFields.Remark) as string,
+            DeliveryType = o.GetUserField(UnicontaUserFields.DeliveryType) as string,
+            DeliveryContactPerson = o.DeliveryContactPerson,
+            DeliveryContactEmail = o.DeliveryContactEmail,
+            DeliveryContactPhone = o.DeliveryPhone,
+            // Shipmondo-related fields
+            TransportType = o.GetUserField(UnicontaUserFields.TransportType) as string,
+            DeliveryTime = o.GetUserField(UnicontaUserFields.DeliveryTime) as DateTime?,
+            CarrierMessage = o.GetUserField(UnicontaUserFields.CarrierMessage) as string,
+            // Byttepaller: only "Ja" enables PL_EXCHANGE; blank/Nej/unknown => false (safe default).
+            ExchangePallets = string.Equals(
+                o.GetUserField(UnicontaUserFields.ExchangePallets) as string, "Ja", StringComparison.OrdinalIgnoreCase),
+
+            DebtorName = debtor?._Name,
+            DebtorCVR = debtor?.CompanyRegNo,
+            YourReference = o.YourRef,
+            OurReference = o.OurRef,
+        };
+
+        foreach (var l in lines ?? Enumerable.Empty<DebtorOrderLineClient>())
+        {
+            int itemType = 0;
+            if (!string.IsNullOrEmpty(l._Item) && itemTypeBySku.TryGetValue(l._Item, out var cachedType))
             {
-                OrderNumber = o.OrderNumber,
-                Date = o._Created,
-                DebtorAccount = o.Account,
-                Comments = o._Remark,
-                DeliveryName = o._DeliveryName ?? debtor?._Name,
-                DeliveryAddress1 = o._DeliveryAddress1 ?? debtor?._Address1,
-                DeliveryAddress2 = o._DeliveryAddress2 ?? debtor?._Address2,
-                DeliveryAddress3 = o._DeliveryAddress3 ?? debtor?._Address3,
-                DeliveryZip = o._DeliveryZipCode ?? debtor?._ZipCode,
-                DeliveryCity = o._DeliveryCity ?? debtor?._City,
-                DeliveryCountryCode = debtor?._Country == 0 ? "DK" : debtor?._Country.ToString(),
-                // Additional fields for JD mapping
-                DeliveryDate = o._DeliveryDate == default ? null : o._DeliveryDate,
-                TrackingNote = o.GetUserField(UnicontaUserFields.TrackingNote) as string,
-                DeliveryNoteText = o.GetUserField(UnicontaUserFields.DeliveryNoteText) as string,
-                RemarkText = o.GetUserField(UnicontaUserFields.Remark) as string,
-                DeliveryType = o.GetUserField(UnicontaUserFields.DeliveryType) as string,
-                DeliveryContactPerson = o.DeliveryContactPerson,
-                DeliveryContactEmail = o.DeliveryContactEmail,
-                DeliveryContactPhone = o.DeliveryPhone,
-                // Shipmondo-related fields
-                TransportType = o.GetUserField(UnicontaUserFields.TransportType) as string,
-                DeliveryTime = o.GetUserField(UnicontaUserFields.DeliveryTime) as DateTime?,
-                CarrierMessage = o.GetUserField(UnicontaUserFields.CarrierMessage) as string,
-                // Byttepaller: only "Ja" enables PL_EXCHANGE; blank/Nej/unknown => false (safe default).
-                ExchangePallets = string.Equals(
-                    o.GetUserField(UnicontaUserFields.ExchangePallets) as string, "Ja", StringComparison.OrdinalIgnoreCase),
-
-                DebtorName = debtor?._Name,
-                DebtorCVR = debtor?.CompanyRegNo,
-                YourReference = o.YourRef,
-                OurReference = o.OurRef,
-            };
-
-            if (linesByOrderRowId.TryGetValue(o.RowId, out var lines))
-            {
-                foreach (var l in lines)
-                {
-                    int itemType = 0;
-                    if (!string.IsNullOrEmpty(l._Item) && itemTypeBySku.TryGetValue(l._Item, out var cachedType))
-                    {
-                        itemType = cachedType;
-                    }
-
-                    so.Lines.Add(new LocalSalesOrderLine
-                    {
-                        Sku = l._Item,
-                        ItemName = l.Text,
-                        Quantity = l._Qty,
-                        Unit = l.Unit,
-                        Price = (decimal?)l.Price,
-                        ItemType = itemType
-                    });
-                }
+                itemType = cachedType;
             }
 
-            yield return so;
+            so.Lines.Add(new LocalSalesOrderLine
+            {
+                Sku = l._Item,
+                ItemName = l.Text,
+                Quantity = l._Qty,
+                Unit = l.Unit,
+                Price = (decimal?)l.Price,
+                ItemType = itemType
+            });
         }
+
+        return so;
     }
 
     public async IAsyncEnumerable<DebtorDeliveryNoteInfo> ReadDebtorDeliveryNotesAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
@@ -508,31 +564,8 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var invoice = new LocalPurchaseInvoice
-            {
-                PurchaseNumber = inv.OrderNumber,
-                InvoiceNumber = inv.InvoiceNumber,
-                Date = inv.Date,
-                SupplierAccount = inv.Account,
-            };
-
-            var masters = new List<UnicontaBaseEntity> { inv };
-            var lines = await queryApi.Query<CreditorInvoiceLines>(masters, null);
-            foreach (var l in lines ?? Enumerable.Empty<CreditorInvoiceLines>())
-            {
-                // Only physical stock lines go to JD; skip fee/charge lines and blank items.
-                if (string.IsNullOrWhiteSpace(l.Item)) continue;
-                if (!string.Equals(l.Group, StockLineGroup, StringComparison.OrdinalIgnoreCase)) continue;
-
-                invoice.Lines.Add(new LocalPurchaseInvoiceLine
-                {
-                    Sku = l.Item,
-                    Quantity = l.Qty,
-                    IsSubItem = true,
-                    Unit = l.Unit,
-                    CustomerItemNumber = l.GetUserField(UnicontaUserFields.ExternalSku) as string
-                });
-            }
+            var invLines = await queryApi.Query<CreditorInvoiceLines>(new List<UnicontaBaseEntity> { inv }, null);
+            var invoice = ProjectPurchaseInvoice(inv, invLines);
 
             // A flagged invoice with no stock lines (e.g. a pure fee/charge invoice flagged by mistake)
             // would otherwise map to a JD shipment with zero lines. Skip it — never send an empty shipment.
@@ -546,6 +579,59 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
 
             yield return invoice;
         }
+    }
+
+    // Inspection: fetch the posted purchase invoice for a given originating order number, ignoring the
+    // transfer-flag/JD-status eligibility. Returns the most-recent invoice for that order (or null). Uses
+    // the same ProjectPurchaseInvoice projection as the sync path; an invoice with 0 stock lines is
+    // returned as-is here (unlike the sync path, which skips it) so the caller can see exactly that.
+    public async Task<LocalPurchaseInvoice?> ReadPostedPurchaseInvoiceByNumberAsync(int purchaseNumber, CancellationToken cancellationToken)
+    {
+        var queryApi = await connectionManager.CreateQueryApiAsync();
+        var filter = new[] { PropValuePair.GenereteWhereElements(nameof(CreditorInvoiceClient.OrderNumber), purchaseNumber, CompareOperator.Equal, typeof(int)) };
+        var invoices = await queryApi.Query<CreditorInvoiceClient>(filter);
+        var inv = (invoices ?? Enumerable.Empty<CreditorInvoiceClient>())
+            .Where(i => i != null && !i._Deleted && i.OrderNumber == purchaseNumber)
+            .OrderByDescending(i => i.InvoiceNumber)
+            .FirstOrDefault();
+        if (inv == null) return null;
+        var invLines = await queryApi.Query<CreditorInvoiceLines>(new List<UnicontaBaseEntity> { inv }, null);
+        return ProjectPurchaseInvoice(inv, invLines);
+    }
+
+    private static LocalPurchaseInvoice ProjectPurchaseInvoice(CreditorInvoiceClient inv, IEnumerable<CreditorInvoiceLines>? lines)
+    {
+        var invoice = new LocalPurchaseInvoice
+        {
+            PurchaseNumber = inv.OrderNumber,
+            InvoiceNumber = inv.InvoiceNumber,
+            Date = inv.Date,
+            SupplierAccount = inv.Account,
+            // Same PO user fields the open-order path reads (ReadAllPurchaseOrdersAsync); Uniconta
+            // copies them onto the booked invoice, so the safety-net maps carrier + container/"kolli"
+            // identically. Absent/unpopulated fields degrade to TBD / no parent, never throw.
+            Carrier = inv.GetUserField(UnicontaUserFields.PurchaseOrderCarrier) as string,
+            RemarkText = inv.GetUserField(UnicontaUserFields.PurchaseOrderRemark) as string,
+            ContainerType = inv.GetUserField(UnicontaUserFields.PurchaseOrderContainerType) as string,
+            ContainerCount = ToNullableDouble(inv.GetUserField(UnicontaUserFields.PurchaseOrderContainerCount)),
+        };
+
+        foreach (var l in lines ?? Enumerable.Empty<CreditorInvoiceLines>())
+        {
+            // Only physical stock lines go to JD; skip fee/charge lines and blank items.
+            if (string.IsNullOrWhiteSpace(l.Item)) continue;
+            if (!string.Equals(l.Group, StockLineGroup, StringComparison.OrdinalIgnoreCase)) continue;
+
+            invoice.Lines.Add(new LocalPurchaseInvoiceLine
+            {
+                Sku = l.Item,
+                Quantity = l.Qty,
+                Unit = l.Unit,
+                CustomerItemNumber = l.GetUserField(UnicontaUserFields.ExternalSku) as string
+            });
+        }
+
+        return invoice;
     }
 
     public Task<bool> SetPurchaseInvoiceHeaderFieldsAsync(int orderNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)

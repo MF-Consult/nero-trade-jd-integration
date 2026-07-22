@@ -388,6 +388,35 @@ Reuse an existing `IUnicontaService` / `IJdLogisticsService` method — **never 
 
 See the three existing endpoints as templates.
 
+### 7.5 Read-only inspection endpoints (Uniconta source of truth)
+
+Two **GET**, **read-only** endpoints for answering "why did this order map like that?" (e.g. speditør/kolli). They pull a specific order straight from Uniconta — **ignoring** the transfer-flag/status eligibility the sync enforces — and return BOTH the raw Uniconta projection and the exact JD payload the mappers produce. No mutation, so safe regardless of DryRun. Function-key auth only (no shared secret). Code: `Functions/InspectOrderFromUniconta.cs`.
+
+```http
+GET https://<host>/api/inspect/purchase-order/{poNumber}
+x-functions-key: <function-key>
+```
+
+- Tries the **open** purchase order first; if the order was booked (bogført) it falls back to the **posted invoice** (the safety-net source) and reports which via `source: "open-order" | "posted-invoice"`.
+- The `jd` block spells out the `[JsonIgnore]` fields (`Sku`, `unit`, `SourcePurchaseNumber`) that never reach JD's wire payload, so carrier/kolli/catalog are fully visible.
+
+```json
+200 OK
+{
+  "poNumber": 39,
+  "source": "posted-invoice",
+  "uniconta": { "purchaseNumber": 39, "carrier": "...", "containerType": "...", "containerCount": 0, "lines": [ ... ] },
+  "jd": { "text": "PO 39", "carrier": "...", "lines": [ { "isSubItem": false, "quantity": 1, "sku": "...", "unit": "...", "externalIdentification": null } ] }
+}
+```
+
+```http
+GET https://<host>/api/inspect/sales-order/{soNumber}
+x-functions-key: <function-key>
+```
+
+Returns `{ soNumber, uniconta: <LocalSalesOrder>, jd: <JdRequestOrderCreate> }`. Uses the same `ProjectSalesOrder` projection as the sync path, so what you see is what the sync would map.
+
 ---
 
 ## 8. `integration_playbooks` schema

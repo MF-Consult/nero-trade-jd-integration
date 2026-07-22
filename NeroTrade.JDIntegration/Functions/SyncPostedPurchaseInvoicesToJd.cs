@@ -49,8 +49,9 @@ public sealed class SyncPostedPurchaseInvoicesToJd(
             int totalProcessed = 0, totalSucceeded = 0, totalFailed = 0;
             await foreach (var invoice in uniconta.ReadPostedPurchaseInvoicesBatchedAsync(200, cancellationToken))
             {
+                // The mapper already sets the shared "PO {n}[ - remark]" identity (same as the open-order
+                // path); no override here, so the safety-net's text — and dedup key — match exactly.
                 var payload = mapper.Map(invoice);
-                payload.text = $"PO {invoice.PurchaseNumber}";
                 batch.Add(payload);
                 if (batch.Count >= 200)
                 {

@@ -5,18 +5,56 @@ using NeroTrade.JDIntegration.Services.UnicontaHandler.Models;
 
 public sealed class PurchaseOrderMapper
 {
-    public JdIncomingShipmentCreate Map(LocalPurchaseOrder po)
+    public JdIncomingShipmentCreate Map(LocalPurchaseOrder po) =>
+        BuildIncomingShipment(
+            po.PurchaseNumber,
+            po.DeliveryDate,
+            po.RemarkText,
+            po.Carrier,
+            po.ContainerType,
+            po.ContainerCount,
+            po.Lines.Select(l => new LineInput(l.Sku, l.Quantity, l.Unit, l.CustomerItemNumber)));
+
+    /// <summary>
+    /// Maps a posted purchase invoice to a JD incoming shipment. Delegates to the SAME
+    /// <see cref="BuildIncomingShipment"/> core as <see cref="Map(LocalPurchaseOrder)"/>, so the safety-net
+    /// produces an identical shipment (carrier, container/"kolli" parent, "PO {n}[ - remark]" identity,
+    /// notification/approval fields) — the two paths cannot drift. The shared "PO {originatingOrderNumber}"
+    /// text is what JD's existing-shipment dedup uses to treat an order already sent via the open-order
+    /// flow (or an earlier tick) as a duplicate and skip it.
+    /// </summary>
+    public JdIncomingShipmentCreate Map(LocalPurchaseInvoice invoice) =>
+        BuildIncomingShipment(
+            invoice.PurchaseNumber,
+            deliveryDate: null, // posted invoices carry no expected-delivery date; same fallback as the PO path
+            invoice.RemarkText,
+            invoice.Carrier,
+            invoice.ContainerType,
+            invoice.ContainerCount,
+            invoice.Lines.Select(l => new LineInput(l.Sku, l.Quantity, l.Unit, l.CustomerItemNumber)));
+
+    // Single source of truth for the Uniconta purchase → JD incoming-shipment structure. Both the
+    // open-order and posted-invoice (safety-net) paths funnel through here so they are identical by
+    // construction.
+    private static JdIncomingShipmentCreate BuildIncomingShipment(
+        int purchaseNumber,
+        DateTime? deliveryDate,
+        string? remarkText,
+        string? carrier,
+        string? containerType,
+        double? containerCount,
+        IEnumerable<LineInput> lines)
     {
         var create = new JdIncomingShipmentCreate
         {
-            date = po.DeliveryDate ?? DateTime.UtcNow.AddDays(2),
+            date = deliveryDate ?? DateTime.UtcNow.AddDays(2),
             // "PO {n}" is the machine key parsed back out via JdOrderHelper (dedup and
             // received-quantity sync) — the remark may only ever be appended after it.
-            text = string.IsNullOrWhiteSpace(po.RemarkText)
-                ? $"PO {po.PurchaseNumber}"
-                : $"PO {po.PurchaseNumber} - {po.RemarkText.Trim()}",
-            SourcePurchaseNumber = po.PurchaseNumber,
-            carrier = string.IsNullOrWhiteSpace(po.Carrier) ? "TBD" : po.Carrier!.Trim(),
+            text = string.IsNullOrWhiteSpace(remarkText)
+                ? $"PO {purchaseNumber}"
+                : $"PO {purchaseNumber} - {remarkText.Trim()}",
+            SourcePurchaseNumber = purchaseNumber,
+            carrier = string.IsNullOrWhiteSpace(carrier) ? "TBD" : carrier.Trim(),
             notificationEmails = "mb@nerotrade.dk",
             disableApprovalEmail = false,
             files = []
@@ -27,7 +65,7 @@ public sealed class PurchaseOrderMapper
         // that parent here; otherwise the products go as a flat list (isSubItem=false) — both are valid
         // JD structures. The previous code hardcoded isSubItem=true on every line with no parent, which
         // left the pallet structure malformed on the incoming shipment.
-        var hasContainer = !string.IsNullOrWhiteSpace(po.ContainerType) && po.ContainerCount is > 0;
+        var hasContainer = !string.IsNullOrWhiteSpace(containerType) && containerCount is > 0;
         if (hasContainer)
         {
             // Pure container parent: no SKU/catalog. unit carries the container-type name so
@@ -35,14 +73,14 @@ public sealed class PurchaseOrderMapper
             // ResolveCatalogItems skips it (no SKU). It is added first so it precedes its children.
             create.lines.Add(new JdIncomingLine
             {
-                quantity = (int)Math.Round(po.ContainerCount!.Value),
+                quantity = (int)Math.Round(containerCount!.Value),
                 isSubItem = false,
                 Sku = null,
-                unit = po.ContainerType!.Trim()
+                unit = containerType!.Trim()
             });
         }
 
-        foreach (var line in po.Lines)
+        foreach (var line in lines)
         {
             if (string.IsNullOrWhiteSpace(line.Sku)) continue;
             create.lines.Add(new JdIncomingLine
@@ -63,39 +101,8 @@ public sealed class PurchaseOrderMapper
         return create;
     }
 
-    /// <summary>
-    /// Maps a posted purchase invoice to a JD incoming shipment. Emits the SAME "PO {originatingOrderNumber}"
-    /// identity as <see cref="Map(LocalPurchaseOrder)"/> so JD's existing-shipment dedup treats an order
-    /// already sent via the open-order flow (or an earlier tick) as a duplicate and skips it.
-    /// </summary>
-    public JdIncomingShipmentCreate Map(LocalPurchaseInvoice invoice)
-    {
-        var create = new JdIncomingShipmentCreate
-        {
-            date = DateTime.UtcNow.AddDays(2),
-            text = $"PO {invoice.PurchaseNumber}",
-            SourcePurchaseNumber = invoice.PurchaseNumber,
-            carrier = "TBD",
-            notificationEmails = null,
-            disableApprovalEmail = true,
-            files = []
-        };
-        foreach (var line in invoice.Lines)
-        {
-            if (string.IsNullOrWhiteSpace(line.Sku)) continue;
-            create.lines.Add(new JdIncomingLine
-            {
-                quantity = (int)Math.Round(line.Quantity),
-                isSubItem = line.IsSubItem,
-                externalIdentification = string.IsNullOrWhiteSpace(line.CustomerItemNumber)
-                    ? null
-                    : line.CustomerItemNumber,
-                Sku = line.Sku,
-                unit = line.Unit
-            });
-        }
-        return create;
-    }
+    // Common line shape both purchase-order and posted-invoice lines project into before mapping.
+    private readonly record struct LineInput(string? Sku, double Quantity, string? Unit, string? CustomerItemNumber);
 }
 
 

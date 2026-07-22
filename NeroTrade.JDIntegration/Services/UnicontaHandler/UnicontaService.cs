@@ -148,6 +148,16 @@ public sealed class UnicontaService(IUnicontaRepository repo, JdSettings jdSetti
         return repo.SetPurchaseInvoiceHeaderFieldsAsync(orderNumber, fields, cancellationToken);
     }
 
+    // Inspection (read-only) — no DryRun gating; these never mutate.
+    public Task<LocalPurchaseOrder?> ReadPurchaseOrderByNumberAsync(int purchaseNumber, CancellationToken cancellationToken)
+        => repo.ReadPurchaseOrderByNumberAsync(purchaseNumber, cancellationToken);
+
+    public Task<LocalPurchaseInvoice?> ReadPostedPurchaseInvoiceByNumberAsync(int purchaseNumber, CancellationToken cancellationToken)
+        => repo.ReadPostedPurchaseInvoiceByNumberAsync(purchaseNumber, cancellationToken);
+
+    public Task<LocalSalesOrder?> ReadSalesOrderByNumberAsync(int orderNumber, CancellationToken cancellationToken)
+        => repo.ReadSalesOrderByNumberAsync(orderNumber, cancellationToken);
+
     public async IAsyncEnumerable<DebtorDeliveryNoteInfo> ReadDebtorDeliveryNotesAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await foreach (var note in repo.ReadDebtorDeliveryNotesAsync(cancellationToken))

@@ -85,6 +85,106 @@ public class PostedPurchaseInvoiceSyncTests
         Assert.Contains("UNKNOWN-SKU", failure.Message);
     }
 
+    [Fact]
+    public void Map_PostedInvoice_MapsCarrierAndRemark_LikeOpenOrderPath()
+    {
+        var invoice = new LocalPurchaseInvoice
+        {
+            PurchaseNumber = 99,
+            Carrier = "DSV",
+            RemarkText = "Levering bagindgang"
+        };
+        invoice.Lines.Add(new LocalPurchaseInvoiceLine { Sku = "ITEM-1", Quantity = 1, Unit = "Stk" });
+
+        var shipment = new PurchaseOrderMapper().Map(invoice);
+
+        Assert.Equal("DSV", shipment.carrier);                     // was hardcoded "TBD" before
+        Assert.Equal("PO 99 - Levering bagindgang", shipment.text); // remark now carried, like the PO path
+        Assert.Equal("mb@nerotrade.dk", shipment.notificationEmails);
+        Assert.False(shipment.disableApprovalEmail);
+    }
+
+    [Fact]
+    public void Map_PostedInvoice_WithContainerFields_EmitsKolliParentThenChildren()
+    {
+        var invoice = new LocalPurchaseInvoice
+        {
+            PurchaseNumber = 99,
+            ContainerType = "Palle",
+            ContainerCount = 3
+        };
+        invoice.Lines.Add(new LocalPurchaseInvoiceLine { Sku = "ITEM-1", Quantity = 5, Unit = "Stk" });
+        invoice.Lines.Add(new LocalPurchaseInvoiceLine { Sku = "ITEM-2", Quantity = 2, Unit = "Stk" });
+
+        var shipment = new PurchaseOrderMapper().Map(invoice);
+
+        Assert.Equal(3, shipment.lines.Count);
+        var parent = shipment.lines[0];
+        Assert.False(parent.isSubItem!.Value); // the container itself
+        Assert.Null(parent.Sku);
+        Assert.Equal(3, parent.quantity);
+        Assert.Equal("Palle", parent.unit);
+        Assert.All(shipment.lines.Skip(1), child => Assert.True(child.isSubItem!.Value));
+    }
+
+    [Fact]
+    public void Map_PostedInvoice_WithoutContainerFields_SendsFlatLines_NotKolli()
+    {
+        var invoice = new LocalPurchaseInvoice { PurchaseNumber = 99 };
+        invoice.Lines.Add(new LocalPurchaseInvoiceLine { Sku = "ITEM-1", Quantity = 1, Unit = "Stk" });
+
+        var shipment = new PurchaseOrderMapper().Map(invoice);
+
+        var line = Assert.Single(shipment.lines);
+        Assert.False(line.isSubItem!.Value); // flat, not hung under a container parent
+        Assert.Equal("ITEM-1", line.Sku);
+    }
+
+    [Fact]
+    public void Map_PostedInvoice_IsStructurallyIdentical_ToOpenOrderPath()
+    {
+        // Same header + lines through both overloads must produce the same JD shipment — this is the
+        // guard against the two paths drifting again (the original speditør/kolli bug).
+        var po = new LocalPurchaseOrder
+        {
+            PurchaseNumber = 99,
+            Carrier = "DSV",
+            RemarkText = "haster",
+            ContainerType = "Palle",
+            ContainerCount = 2
+        };
+        po.Lines.Add(new LocalPurchaseOrderLine { Sku = "ITEM-1", Quantity = 5, Unit = "Stk", CustomerItemNumber = "PC-1" });
+
+        var invoice = new LocalPurchaseInvoice
+        {
+            PurchaseNumber = 99,
+            Carrier = "DSV",
+            RemarkText = "haster",
+            ContainerType = "Palle",
+            ContainerCount = 2
+        };
+        invoice.Lines.Add(new LocalPurchaseInvoiceLine { Sku = "ITEM-1", Quantity = 5, Unit = "Stk", CustomerItemNumber = "PC-1" });
+
+        var mapper = new PurchaseOrderMapper();
+        var fromOrder = mapper.Map(po);
+        var fromInvoice = mapper.Map(invoice);
+
+        Assert.Equal(fromOrder.text, fromInvoice.text);
+        Assert.Equal(fromOrder.carrier, fromInvoice.carrier);
+        Assert.Equal(fromOrder.SourcePurchaseNumber, fromInvoice.SourcePurchaseNumber);
+        Assert.Equal(fromOrder.notificationEmails, fromInvoice.notificationEmails);
+        Assert.Equal(fromOrder.disableApprovalEmail, fromInvoice.disableApprovalEmail);
+        Assert.Equal(fromOrder.lines.Count, fromInvoice.lines.Count);
+        foreach (var (a, b) in fromOrder.lines.Zip(fromInvoice.lines))
+        {
+            Assert.Equal(a.isSubItem, b.isSubItem);
+            Assert.Equal(a.quantity, b.quantity);
+            Assert.Equal(a.Sku, b.Sku);
+            Assert.Equal(a.unit, b.unit);
+            Assert.Equal(a.externalIdentification, b.externalIdentification);
+        }
+    }
+
     private static JdIncomingShipmentCreate MapInvoice(int orderNumber, long invoiceNumber, params (string sku, string? externalSku)[] lines)
     {
         var invoice = new LocalPurchaseInvoice { PurchaseNumber = orderNumber, InvoiceNumber = invoiceNumber };
@@ -94,7 +194,6 @@ public class PostedPurchaseInvoiceSyncTests
             {
                 Sku = sku,
                 Quantity = 1,
-                IsSubItem = true,
                 Unit = "Stk",
                 CustomerItemNumber = externalSku
             });

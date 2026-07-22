@@ -23,6 +23,11 @@ public interface IUnicontaRepository
     IAsyncEnumerable<LocalPurchaseInvoice> ReadPostedPurchaseInvoicesAsync(CancellationToken cancellationToken);
     Task<bool> SetPurchaseInvoiceHeaderFieldsAsync(int orderNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken);
 
+    // Inspection (read-only, eligibility-agnostic) — fetch a single order/invoice by number for analysis.
+    Task<LocalPurchaseOrder?> ReadPurchaseOrderByNumberAsync(int purchaseNumber, CancellationToken cancellationToken);
+    Task<LocalPurchaseInvoice?> ReadPostedPurchaseInvoiceByNumberAsync(int purchaseNumber, CancellationToken cancellationToken);
+    Task<LocalSalesOrder?> ReadSalesOrderByNumberAsync(int orderNumber, CancellationToken cancellationToken);
+
     // File operations - get delivery notes for debtors
     IAsyncEnumerable<DebtorDeliveryNoteInfo> ReadDebtorDeliveryNotesAsync(CancellationToken cancellationToken);
 }

@@ -88,6 +88,11 @@ public class UnicontaServiceDryRunTests
         public IAsyncEnumerable<LocalSalesOrder> ReadSalesOrdersWithGroupAsync(CancellationToken cancellationToken) => EmptyAsync<LocalSalesOrder>();
         public IAsyncEnumerable<DebtorDeliveryNoteInfo> ReadDebtorDeliveryNotesAsync(CancellationToken cancellationToken) => EmptyAsync<DebtorDeliveryNoteInfo>();
 
+        // Inspection reads — inert here.
+        public Task<LocalPurchaseOrder?> ReadPurchaseOrderByNumberAsync(int purchaseNumber, CancellationToken cancellationToken) => Task.FromResult<LocalPurchaseOrder?>(null);
+        public Task<LocalPurchaseInvoice?> ReadPostedPurchaseInvoiceByNumberAsync(int purchaseNumber, CancellationToken cancellationToken) => Task.FromResult<LocalPurchaseInvoice?>(null);
+        public Task<LocalSalesOrder?> ReadSalesOrderByNumberAsync(int orderNumber, CancellationToken cancellationToken) => Task.FromResult<LocalSalesOrder?>(null);
+
         private static async IAsyncEnumerable<T> EmptyAsync<T>()
         {
             await Task.CompletedTask;
