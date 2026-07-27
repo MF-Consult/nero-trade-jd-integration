@@ -173,6 +173,15 @@ public sealed class SyncSalesOrdersToJd(
                 });
                 }
             }
+            catch (UnicontaConnectionUnavailableException ex)
+            {
+                // Uniconta was unreachable this tick — nothing actionable on our side, and the next
+                // tick reconnects. Recorded as a warning run (see ErrorCodeClassifier) and deliberately
+                // NOT rethrown, so it does not also surface as a failed invocation in App Insights.
+                run.MarkFailed(ex);
+                run.ExitReason = "uniconta_unavailable";
+                logger.LogWarning(ex, "Uniconta unavailable; skipping this SyncSalesOrdersToJd tick");
+            }
             catch (Exception ex)
             {
                 run.MarkFailed(ex);

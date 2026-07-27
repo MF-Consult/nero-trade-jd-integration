@@ -16,6 +16,12 @@ namespace NeroTrade.JDIntegration.Functions.Admin;
 /// here. The endpoints are gated by a shared-secret header (<c>X-Remediation-Secret</c>) bound from
 /// <see cref="RemediationOptions"/>; if the secret is not configured, every endpoint refuses the call so
 /// the surface cannot accidentally be exposed unauthenticated.
+///
+/// <para><b>Route prefix is <c>remediation/</c>, never <c>admin/</c>.</b> The Functions host reserves
+/// <c>/admin/*</c> for its own management API (<c>/admin/host/status</c>, <c>/admin/functions/...</c>),
+/// so all three of these functions failed to register with "The specified route conflicts with one or
+/// more built in routes" — silently, at every host start, from the day they were added (2026-06-27) until
+/// 2026-07-27. They were never callable in production. Do not move them back under <c>admin/</c>.</para>
 /// </summary>
 public sealed class RemediationEndpoints(
     IUnicontaService uniconta,
@@ -27,7 +33,7 @@ public sealed class RemediationEndpoints(
 
     [Function("RetrySalesOrder")]
     public Task<HttpResponseData> RetrySalesOrderAsync(
-        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "admin/retry-sales-order/{soNumber:int}")] HttpRequestData req,
+        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "remediation/retry-sales-order/{soNumber:int}")] HttpRequestData req,
         int soNumber,
         CancellationToken cancellationToken)
         => HandleAsync(req, cancellationToken, async logScope =>
@@ -53,7 +59,7 @@ public sealed class RemediationEndpoints(
 
     [Function("RetryPurchaseOrder")]
     public Task<HttpResponseData> RetryPurchaseOrderAsync(
-        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "admin/retry-purchase-order/{poNumber:int}")] HttpRequestData req,
+        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "remediation/retry-purchase-order/{poNumber:int}")] HttpRequestData req,
         int poNumber,
         CancellationToken cancellationToken)
         => HandleAsync(req, cancellationToken, async logScope =>
@@ -79,7 +85,7 @@ public sealed class RemediationEndpoints(
 
     [Function("OverrideOrderStatus")]
     public Task<HttpResponseData> OverrideOrderStatusAsync(
-        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "admin/override-order-status/{orderNumber:int}")] HttpRequestData req,
+        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "remediation/override-order-status/{orderNumber:int}")] HttpRequestData req,
         int orderNumber,
         CancellationToken cancellationToken)
         => HandleAsync(req, cancellationToken, async logScope =>

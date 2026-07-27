@@ -71,12 +71,14 @@ public sealed class IntegrationRun : IAsyncDisposable
         var duration = (int)Math.Min(int.MaxValue, _stopwatch.ElapsedMilliseconds);
         var finishedAt = DateTimeOffset.UtcNow;
 
-        var level = _failure is null ? "info" : "error";
+        var classified = _failure is null ? null : ErrorCodeClassifier.Classify(_failure);
+
+        // The classifier owns the severity: a run ended by something we cannot act on (Uniconta
+        // unreachable this tick) is a warning, not an error, so it does not sit red in the dashboard.
+        var level = classified?.Level ?? "info";
         var message = _failure is null
             ? $"{_runName} completed in {duration} ms"
             : $"{_runName} failed after {duration} ms: {LogSanitizer.Describe(_failure)}";
-
-        var classified = _failure is null ? null : ErrorCodeClassifier.Classify(_failure);
 
         // Default the exit reason so a row never has a null value — easier to filter on in Supabase.
         // Failure-with-unset wins over "completed" for obvious reasons.

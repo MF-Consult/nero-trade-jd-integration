@@ -1,6 +1,7 @@
 using System.Net;
 using NeroTrade.JDIntegration.Services.ExternalIntegration.Repositories;
 using NeroTrade.JDIntegration.Services.Logging;
+using NeroTrade.JDIntegration.Services.UnicontaHandler;
 using Xunit;
 
 namespace NeroTrade.JDIntegration.Tests;
@@ -12,6 +13,30 @@ namespace NeroTrade.JDIntegration.Tests;
 /// </summary>
 public class ErrorCodeClassifierTests
 {
+    [Fact]
+    public void UnicontaConnectionUnavailable_IsAWarning_NotAnError()
+    {
+        // OpenCompany intermittently returns no company for a valid id. There is nothing to act on and
+        // the next tick reconnects, so it must not land in the dashboard as a red row — the run-completion
+        // level comes from here (IntegrationRun.DisposeAsync).
+        var ex = new UnicontaConnectionUnavailableException("Failed to get company with ID: 129192");
+
+        var classified = ErrorCodeClassifier.Classify(ex);
+
+        Assert.Equal("UNICONTA_CONNECT_FAILED", classified.ErrorCode);
+        Assert.Equal("warning", classified.Level);
+        Assert.True(classified.Retryable);
+    }
+
+    [Fact]
+    public void UnknownException_StaysAnError()
+    {
+        var classified = ErrorCodeClassifier.Classify(new InvalidOperationException("something else"));
+
+        Assert.Equal("SYNC_RUN_FAILED", classified.ErrorCode);
+        Assert.Equal("error", classified.Level);
+    }
+
     [Fact]
     public void JdLookupFailedException_ClassifiedAsJdLookupFailed()
     {

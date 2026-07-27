@@ -137,7 +137,8 @@ Quick rules for in-session edits:
 
 - Every `LogAsync(new IntegrationLogEntry(...))` must set `CorrelationId = logScope.CorrelationId` so all rows from one invocation are linkable.
 - For `error`/`warning` rows, also set `ErrorCode`, `Retryable`, and `SuggestedAction`. The Hermes agent uses these to decide auto-retry vs. ask-in-Slack.
-- New `/admin/*` endpoints reuse existing `IUnicontaService` / `IJdLogisticsService` methods — never invent new business logic in `RemediationEndpoints.cs`.
+- **Severity of a run-ending exception is owned by `ErrorCodeClassifier`** (`ClassifiedError.Level`), not by the call site. A failure nobody can act on — currently `UnicontaConnectionUnavailableException` — is classified `warning` so it does not sit red in the dashboard, and the sync catches it and returns instead of rethrowing. Everything else stays `error`.
+- New `/remediation/*` endpoints reuse existing `IUnicontaService` / `IJdLogisticsService` methods — never invent new business logic in `RemediationEndpoints.cs`.
 
 **Error-code taxonomy** (`SUBSYSTEM_REASON`, SCREAMING_SNAKE — extend freely):
 
@@ -146,6 +147,7 @@ Quick rules for in-session edits:
 - `JD_VALIDATION_REJECTED` — JD accepted the request but rejected the payload (not retryable; needs data fix)
 - `JD_LOOKUP_MISS` — JD returned 404 for a record we expected
 - `JD_CONTAINER_TYPE_UNMAPPED` — a line's unit matched no JD container type; the line shipped as `Stk`. Not retryable — either add the translation in `UnitTranslator` or add the type in JD.
+- `UNICONTA_CONNECT_FAILED` — Uniconta unreachable for this tick (usually `OpenCompany` returning no company for a valid id). Written at **warning** level, not error: nothing is actionable and the next tick reconnects. The sync returns instead of throwing, so the invocation is not marked failed either.
 - `UNICONTA_NO_STOCK_LINES` — a posted purchase invoice is flagged for JD but yields no `Stock` lines, so it is skipped every tick. Not retryable; either the lines really are fee-only, or it is the stale-read symptom below.
 - `UNICONTA_DUPLICATE_SO`, `UNICONTA_LOOKUP_MISS`, `UNICONTA_CRUD_FAILED`, `UNICONTA_ORDER_STATUS_FAILED`, `UNICONTA_AUTH_FAILED` — Uniconta-side. `UNICONTA_ORDER_STATUS_FAILED` is for sales-order Group/user-field update failures specifically (Created/Fejlet on push, JD→Uniconta status sync); other Uniconta writes keep `UNICONTA_CRUD_FAILED`.
 - `SHIPMONDO_NO_CARRIER`, `SHIPMONDO_INVALID_POSTAL` — Shipmondo carrier-mapping problems

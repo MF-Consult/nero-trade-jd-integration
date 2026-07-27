@@ -223,6 +223,15 @@ public sealed class UnicontaConnectionManager : IDisposable
             _connectedAtUtc = DateTime.UtcNow;
             _logger.LogInformation("Successfully connected to company: {CompanyName} (ID: {CompanyId})", _company.Name, _company.CompanyId);
         }
+        catch (UnicontaConnectionUnavailableException ex)
+        {
+            // Uniconta-side transient. Logged as a warning on purpose — see the exception's docs.
+            _logger.LogWarning(ex, "Uniconta connection unavailable this tick; the next tick reconnects");
+            _isLoggedIn = false;
+            _session = null;
+            _company = null;
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to establish Uniconta connection");
@@ -261,7 +270,8 @@ public sealed class UnicontaConnectionManager : IDisposable
                 return company;
 
             if (attempt >= maxRetries)
-                throw failure ?? new InvalidOperationException($"Failed to get company with ID: {_config.CompanyId}");
+                throw new UnicontaConnectionUnavailableException(
+                    $"Failed to get company with ID: {_config.CompanyId}", failure);
 
             _logger.LogWarning(
                 failure,

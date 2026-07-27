@@ -26,7 +26,7 @@ The system is designed so the **same substrate works for every future project** 
 │                              ├───────►│ + playbooks      ├───────►│                  │
 │  Layer 1: rich events        │        │                  │        │ classifier →     │
 │  Layer 2: action endpoints   │◄───────│                  │◄───────│ playbook lookup→ │
-│   (POST /admin/* secret-     │ calls  │                  │ writes │ act OR ask Slack │
+│   (POST /remediation/* secret-     │ calls  │                  │ writes │ act OR ask Slack │
 │    gated)                    │        │                  │ status │                  │
 └──────────────┬───────────────┘        └──────────────────┘        └────────┬─────────┘
                │                                                             │
@@ -53,7 +53,7 @@ Two observability planes with distinct jobs:
 | Phase     | Scope                                                                                                                                          | Status                |
 |-----------|------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------|
 | **1**     | Rich events (correlation_id, error_code, retryable, suggested_action) plumbed through all Sync* functions. Supabase webhook + App Insights alerts wired manually. | ✅ Code done — manual setup pending |
-| **2**     | `/admin/*` remediation endpoints + `integration_playbooks` table seeded. Hermes-side Slack approval buttons.                                   | ✅ Code done — Hermes-side pending |
+| **2**     | `/remediation/*` remediation endpoints + `integration_playbooks` table seeded. Hermes-side Slack approval buttons.                                   | ✅ Code done — Hermes-side pending |
 | **3**     | Hermes classifier + auto-approve per error_code. No further repo changes.                                                                      | Hermes-side work      |
 | **4 (later)** | Agent opens GitHub PRs for repeating code-level bug patterns.                                                                              | Deferred              |
 
@@ -71,7 +71,7 @@ Azure Portal → Function App `nero-trade-data-syncer` → **Configuration → A
 |-------------------------------|----------------------------------------------------|
 | `Remediation__SharedSecret`   | Long random string (≥ 32 chars). Save in a vault. |
 
-The `/admin/*` endpoints **refuse to run** until this is set, so the surface cannot go live unauthenticated.
+The `/remediation/*` endpoints **refuse to run** until this is set, so the surface cannot go live unauthenticated.
 
 Hermes needs two things to call the endpoints:
 - The Azure Functions key (`x-functions-key` header).
@@ -301,6 +301,7 @@ Convention: `SUBSYSTEM_REASON`, SCREAMING_SNAKE. Extend freely — new codes don
 | `JD_VALIDATION_REJECTED`      | JD accepted the request but rejected the payload. **Not retryable** — data fix needed.  |
 | `JD_LOOKUP_MISS`              | JD returned 404 for an expected record.                                                 |
 | `JD_CONTAINER_TYPE_UNMAPPED`  | An incoming-shipment line's unit matched no JD container type; the line shipped as `Stk`. **Not retryable** — add the translation in `UnitTranslator` or the container type in JD. |
+| `UNICONTA_CONNECT_FAILED`     | Uniconta unreachable for one tick — nearly always `OpenCompany` returning no company for a valid id. Written at **warning** level (so it never reaches the `level=eq.error` Hermes webhook) and the sync returns instead of throwing. No action unless it persists across many consecutive ticks. |
 | `UNICONTA_NO_STOCK_LINES`     | A posted purchase invoice is flagged for JD but has no `Stock` lines, so the safety-net skips it every tick. **Not retryable.** Either the invoice really is fee-only, or it is the stale-read symptom (see CLAUDE.md § "Uniconta reads"). Rate-limited to one row per order per hour. |
 | `UNICONTA_DUPLICATE_SO`       | Multiple SOs collide on the same number.                                                |
 | `UNICONTA_LOOKUP_MISS`        | Expected Uniconta record absent.                                                        |
@@ -313,14 +314,14 @@ Convention: `SUBSYSTEM_REASON`, SCREAMING_SNAKE. Extend freely — new codes don
 | `BLOB_UPLOAD_FAILED`          | Pre-signed Azure Blob upload failed.                                                    |
 | `MAPPER_NULL_FIELD`           | Mapper hit an unexpected null on a required field.                                      |
 | `MAPPER_INVALID_STATE`        | Mapper saw an entity in a shape the code didn't expect.                                 |
-| `REMEDIATION_APPLIED`         | Audit row written by `/admin/*` after a successful remediation.                         |
-| `REMEDIATION_NOOP`            | `/admin/*` returned a non-success — the underlying call didn't apply.                   |
-| `REMEDIATION_FAILED`          | `/admin/*` threw before completing.                                                     |
+| `REMEDIATION_APPLIED`         | Audit row written by `/remediation/*` after a successful remediation.                         |
+| `REMEDIATION_NOOP`            | `/remediation/*` returned a non-success — the underlying call didn't apply.                   |
+| `REMEDIATION_FAILED`          | `/remediation/*` threw before completing.                                                     |
 | `UNKNOWN`                     | Fallback. These go to the Hermes "novel error" reasoning cascade.                       |
 
 ---
 
-## 7. `/admin/*` remediation endpoints
+## 7. `/remediation/*` remediation endpoints
 
 All endpoints live in `Functions/Admin/RemediationEndpoints.cs` and require two layers of auth:
 
@@ -331,12 +332,19 @@ Every successful call writes an audit row to `integration_logs` with `error_code
 
 Constant-time comparison is used for the shared secret to avoid leaking length via early exit.
 
-### 7.1 `POST /admin/retry-sales-order/{soNumber}`
+> **Never route these under `admin/`.** The Functions host reserves `/admin/*` for its own management API
+> (`/admin/host/status`, `/admin/functions/...`). These three endpoints originally used `admin/` and
+> therefore **failed to register at every host start** — "The specified route conflicts with one or more
+> built in routes" — from 2026-06-27 until 2026-07-27 (8.784 log rows per endpoint). They were never
+> callable in production, and nothing surfaced it because the host logs the conflict at startup only.
+> Renamed to `remediation/` on 2026-07-27. If Hermes has the old URLs stored anywhere, update them.
+
+### 7.1 `POST /remediation/retry-sales-order/{soNumber}`
 
 Sets the SO's `Group` back to empty + clears `xIntegrationIssue` + flips `xTransferToJD` back to `true`. Next 30-second `SyncSalesOrdersToJd` tick picks it up and re-pushes to JD.
 
 ```http
-POST https://<host>/api/admin/retry-sales-order/2135
+POST https://<host>/api/remediation/retry-sales-order/2135
 x-functions-key: <function-key>
 X-Remediation-Secret: <shared-secret>
 ```
@@ -346,12 +354,12 @@ X-Remediation-Secret: <shared-secret>
 { "action": "retry-sales-order", "soNumber": 2135, "applied": true }
 ```
 
-### 7.2 `POST /admin/retry-purchase-order/{poNumber}`
+### 7.2 `POST /remediation/retry-purchase-order/{poNumber}`
 
 Sets `xJDStatus = "Manuel handling"` + flips `xTransferToJD` back to `true`. Next 40-second `SyncPurchaseOrdersToJd` tick re-pushes.
 
 ```http
-POST https://<host>/api/admin/retry-purchase-order/4711
+POST https://<host>/api/remediation/retry-purchase-order/4711
 x-functions-key: <function-key>
 X-Remediation-Secret: <shared-secret>
 ```
@@ -361,12 +369,12 @@ X-Remediation-Secret: <shared-secret>
 { "action": "retry-purchase-order", "poNumber": 4711, "applied": true }
 ```
 
-### 7.3 `POST /admin/override-order-status/{orderNumber}`
+### 7.3 `POST /remediation/override-order-status/{orderNumber}`
 
 Forces a sales order's `Group` to a specific value when JD/Uniconta status drifted apart and a tick won't fix it.
 
 ```http
-POST https://<host>/api/admin/override-order-status/2135
+POST https://<host>/api/remediation/override-order-status/2135
 Content-Type: application/json
 x-functions-key: <function-key>
 X-Remediation-Secret: <shared-secret>
@@ -465,7 +473,7 @@ When a row arrives via the Supabase webhook:
 
     ```
     🟠 nero-trade-jd-integration · UNICONTA_CRUD_FAILED · SO 2135
-    Suggested: POST /admin/retry-sales-order/2135
+    Suggested: POST /remediation/retry-sales-order/2135
     [ Approve ] [ Reject ] [ Snooze 1h ]
     ```
 
@@ -501,7 +509,7 @@ When a row arrives via the Supabase webhook:
 
 1. With the Supabase webhook firing, an error event reaches Hermes.
 2. Hermes posts a Slack message with Approve/Reject buttons.
-3. Click **Approve** → Hermes calls `/admin/retry-sales-order/2135` with both headers.
+3. Click **Approve** → Hermes calls `/remediation/retry-sales-order/2135` with both headers.
 4. Confirm:
     - Endpoint returns 200 with `applied = true`.
     - A new `integration_logs` row appears with `error_code = REMEDIATION_APPLIED`, `level = info`, `status = open`.
@@ -557,7 +565,7 @@ The console shows `[DRY-RUN] Skipping POST api/incomingshipments — Payload: {�
 The substrate is project-agnostic. Any future project (new Functions app, n8n flow, other service) joins the Monitoring Subscription by doing **three** things — no changes to Hermes:
 
 1. **Emit log rows** to the same `integration_logs` table with `project = '<your-slug>'` and the schema in §5. Use the same `error_code` taxonomy (extend with `<YOURSUBSYSTEM>_REASON` codes as needed).
-2. **Expose `/admin/*` endpoints** behind the same `X-Remediation-Secret` header pattern. The endpoint URLs can differ — the agent learns them from the `integration_playbooks.remediation.endpoint` field.
+2. **Expose `/remediation/*` endpoints** behind the same `X-Remediation-Secret` header pattern. The endpoint URLs can differ — the agent learns them from the `integration_playbooks.remediation.endpoint` field.
 3. **Add a Hermes routing rule** mapping `project → Slack channel` (one config row).
 
 That's it. The agent's classifier, playbook lookup, Slack approval flow, and learning loop are all reused unchanged.
@@ -573,7 +581,7 @@ That's it. The agent's classifier, playbook lookup, Slack approval flow, and lea
 | `Services/Logging/NoOpIntegrationLogger.cs`                                            | Fallback when Supabase isn't configured (local dev). No changes needed.          |
 | `Services/Logging/IntegrationLogScope.cs`                                              | Scoped DI service holding one `Guid` per invocation. The correlation_id.         |
 | `Functions/Sync*.cs` (5 files)                                                         | Inject `IntegrationLogScope`; every `LogAsync` call attaches `CorrelationId`; error/warning calls also set `ErrorCode`, `Retryable`, `SuggestedAction`. |
-| `Functions/Admin/RemediationEndpoints.cs`                                              | Three `/admin/*` endpoints; auth via `RemediationOptions.SharedSecret`; audit logs on every call. |
+| `Functions/Admin/RemediationEndpoints.cs`                                              | Three `/remediation/*` endpoints; auth via `RemediationOptions.SharedSecret`; audit logs on every call. |
 | `Models/Settings/RemediationOptions.cs`                                                | Shared-secret config binding.                                                    |
 | `Program.cs`                                                                           | DI registrations for `IntegrationLogScope` and `RemediationOptions`.             |
 | `CLAUDE.md` → "Monitoring & remediation contract"                                      | Short summary + error_code list for in-session AI agents.                        |
@@ -593,7 +601,7 @@ That's it. The agent's classifier, playbook lookup, Slack approval flow, and lea
 | Phase     | Scope                                                                                  | Owner          | Status   |
 |-----------|----------------------------------------------------------------------------------------|----------------|----------|
 | 1         | Rich events + Supabase webhook + App Insights alerts                                   | Repo + manual  | ✅ Code; manual setup pending |
-| 2         | `/admin/*` endpoints + `integration_playbooks` + Hermes Slack approval                 | Repo + Hermes  | ✅ Repo done; Hermes pending  |
+| 2         | `/remediation/*` endpoints + `integration_playbooks` + Hermes Slack approval                 | Repo + Hermes  | ✅ Repo done; Hermes pending  |
 | 3         | Hermes classifier + auto-approve graduation                                            | Hermes-side    | Pending  |
 | 4 (later) | Agent-generated GitHub PRs for repeating code-level bugs                               | Hermes + GH    | Deferred |
 

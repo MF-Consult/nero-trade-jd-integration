@@ -1,14 +1,32 @@
 using System.Net;
 using NeroTrade.JDIntegration.Services.ExternalIntegration.Repositories;
+using NeroTrade.JDIntegration.Services.UnicontaHandler;
 
 namespace NeroTrade.JDIntegration.Services.Logging;
 
-public sealed record ClassifiedError(string ErrorCode, bool Retryable, string SuggestedAction);
+/// <summary>
+/// Classification of a run-ending exception. <paramref name="Level"/> is what the completion row is
+/// written at: <c>"error"</c> for everything actionable, <c>"warning"</c> for failures that are outside
+/// our control and self-heal on the next tick — those must not sit in dashboards as red rows nobody can
+/// act on.
+/// </summary>
+public sealed record ClassifiedError(string ErrorCode, bool Retryable, string SuggestedAction, string Level = "error");
 
 public static class ErrorCodeClassifier
 {
     public static ClassifiedError Classify(Exception ex)
     {
+        // Uniconta was unreachable for this tick (typically OpenCompany returning no company for a valid
+        // id). Nothing to fix on our side and the next tick reconnects, so it is a warning, not an error.
+        if (ex is UnicontaConnectionUnavailableException)
+        {
+            return new ClassifiedError(
+                "UNICONTA_CONNECT_FAILED",
+                Retryable: true,
+                SuggestedAction: "Uniconta-side transient — no action needed; the next scheduled tick reconnects. Investigate only if it persists across many consecutive ticks.",
+                Level: "warning");
+        }
+
         if (ex is JdLookupFailedException jdLookup)
         {
             return new ClassifiedError(
