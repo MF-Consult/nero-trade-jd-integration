@@ -113,6 +113,22 @@ CI/CD via GitHub Actions (`.github/workflows/master_nero-trade-data-syncer.yml`)
   at night). **In-memory last-run state assumes a single worker instance** — pin `WEBSITE_MAX_INSTANCES=1`.
   To change how often a sync runs, edit `SyncScheduling` config — do not touch the heartbeat cron.
 
+### Uniconta reads: never query with a null filter
+
+`QueryAPI.Query<T>(null)` — including the master/detail overload `Query<T>(masterList, null)` — opts into
+the SDK's `SetCache` path and can serve a **stale session snapshot for the lifetime of the worker process**,
+cleared only by a restart. Every read in `UnicontaRepository` therefore passes a filter, even when the filter
+matches everything (e.g. `OrderNumber > 0`) — the row set is unchanged; the point is the code path.
+
+Two production incidents came from this, both invisible until a restart happened to fix them:
+`ordre 2161` (2026-05-27, sales-order headers) and **PO 43** (2026-07-27): a booked purchase invoice read its
+header fresh every tick while its *lines* came back empty for ~5 hours, so the order was skipped 51 times and
+only reached JD after a deploy restarted the worker. PO 39 lost 8½ hours to the same thing on 2026-07-21.
+
+If you add a Uniconta read: pass a filter, and never treat "zero detail rows" as fact without a re-ask.
+`ReadAllItemsAsync` / `ReadAllDebtorsAsync` are the remaining unfiltered reads (string-keyed tables, no
+match-all filter established yet) — fix them the same way if they ever show the symptom.
+
 ### Monitoring & remediation contract
 
 **Canonical reference: [docs/operations.md](docs/operations.md)** — architecture, full schema, manual setup steps, endpoint catalogue, Hermes brain contract, multi-project reuse contract, file-by-file map. Read that file before changing anything in `Services/Logging/`, `Functions/Sync*`, or `Functions/Admin/`.
@@ -130,6 +146,7 @@ Quick rules for in-session edits:
 - `JD_VALIDATION_REJECTED` — JD accepted the request but rejected the payload (not retryable; needs data fix)
 - `JD_LOOKUP_MISS` — JD returned 404 for a record we expected
 - `JD_CONTAINER_TYPE_UNMAPPED` — a line's unit matched no JD container type; the line shipped as `Stk`. Not retryable — either add the translation in `UnitTranslator` or add the type in JD.
+- `UNICONTA_NO_STOCK_LINES` — a posted purchase invoice is flagged for JD but yields no `Stock` lines, so it is skipped every tick. Not retryable; either the lines really are fee-only, or it is the stale-read symptom below.
 - `UNICONTA_DUPLICATE_SO`, `UNICONTA_LOOKUP_MISS`, `UNICONTA_CRUD_FAILED`, `UNICONTA_ORDER_STATUS_FAILED`, `UNICONTA_AUTH_FAILED` — Uniconta-side. `UNICONTA_ORDER_STATUS_FAILED` is for sales-order Group/user-field update failures specifically (Created/Fejlet on push, JD→Uniconta status sync); other Uniconta writes keep `UNICONTA_CRUD_FAILED`.
 - `SHIPMONDO_NO_CARRIER`, `SHIPMONDO_INVALID_POSTAL` — Shipmondo carrier-mapping problems
 - `PDF_GENERATION_FAILED`, `BLOB_UPLOAD_FAILED` — delivery-note pipeline

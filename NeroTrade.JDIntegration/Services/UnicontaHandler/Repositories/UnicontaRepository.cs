@@ -7,8 +7,13 @@ using Constants;
 using Uniconta.ClientTools.DataModel;
 using Uniconta.Common;
 using Microsoft.Extensions.Logging;
+using NeroTrade.JDIntegration.Services.Logging;
+using System.Collections.Concurrent;
 
-public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILogger<UnicontaRepository> logger) : IUnicontaRepository
+public class UnicontaRepository(
+    UnicontaConnectionManager connectionManager,
+    IIntegrationLogger integrationLogger,
+    ILogger<UnicontaRepository> logger) : IUnicontaRepository
 {
     private readonly ILogger<UnicontaRepository> _logger = logger;
     public async IAsyncEnumerable<LocalDebtor> ReadAllDebtorsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
@@ -55,17 +60,45 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         }
     }
 
+    // Matches every real purchase order (order numbers are 1-based), so the row set is identical to the
+    // unfiltered query — the point is purely the code path. Query<T>(null) opts into SetCache=true and can
+    // serve a stale session snapshot; a filtered query re-asks the server. Same reason the sales-order and
+    // posted-invoice reads are filtered. See the 2026-07-27 incident note on QueryPostedInvoiceLinesAsync.
+    private static PropValuePair[] AllPurchaseOrdersFilter() =>
+    [
+        PropValuePair.GenereteWhereElements(nameof(CreditorOrderClient.OrderNumber), 0, CompareOperator.GreaterThan, typeof(int))
+    ];
+
     public async IAsyncEnumerable<LocalPurchaseOrder> ReadAllPurchaseOrdersAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
-        var orders = await queryApi.Query<CreditorOrderClient>((IEnumerable<PropValuePair>?)null);
+        var orders = await queryApi.Query<CreditorOrderClient>(AllPurchaseOrdersFilter());
         foreach (var o in (orders ?? Enumerable.Empty<CreditorOrderClient>()).Where(o => o != null && o.GetUserFieldBoolean(UnicontaUserFields.PurchaseOrderTransferFlag) && PurchaseOrderJdStatusValues.IsPending(o.GetUserField(UnicontaUserFields.PurchaseOrderJdStatus) as string)))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            // Fetch detail lines using Master/Detail query to ensure lines are loaded.
-            var lines = await queryApi.Query<CreditorOrderLineClient>(new List<UnicontaBaseEntity> { o }, null);
+            var lines = await QueryPurchaseOrderLinesAsync(queryApi, o);
             yield return ProjectPurchaseOrder(o, lines);
         }
+    }
+
+    /// <summary>
+    /// Detail lines for an open purchase order. Master/detail is kept (it is what ties the lines to this
+    /// order) but a filter is passed instead of <c>null</c>: the null-filter form takes the SetCache path,
+    /// which is what made a booked order look line-less for hours on 2026-07-27. If the primary read comes
+    /// back empty we re-ask with a standalone filtered query before believing it — an empty detail result
+    /// is exactly the symptom of the stale snapshot, and acting on it drops real orders silently.
+    /// </summary>
+    private static async Task<IEnumerable<CreditorOrderLineClient>> QueryPurchaseOrderLinesAsync(Uniconta.API.System.QueryAPI queryApi, CreditorOrderClient order)
+    {
+        var filter = new[]
+        {
+            PropValuePair.GenereteWhereElements(nameof(CreditorOrderClient.OrderNumber), order.OrderNumber, CompareOperator.Equal, typeof(int))
+        };
+
+        var lines = await queryApi.Query<CreditorOrderLineClient>(new List<UnicontaBaseEntity> { order }, filter);
+        if (lines is { Length: > 0 }) return lines;
+
+        return await queryApi.Query<CreditorOrderLineClient>(filter) ?? Enumerable.Empty<CreditorOrderLineClient>();
     }
 
     // Inspection: fetch ONE open purchase order by number, ignoring the transfer-flag/JD-status eligibility
@@ -79,7 +112,7 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         var orders = await queryApi.Query<CreditorOrderClient>(filter);
         var o = (orders ?? Enumerable.Empty<CreditorOrderClient>()).FirstOrDefault(x => x != null && x.OrderNumber == purchaseNumber);
         if (o == null) return null;
-        var lines = await queryApi.Query<CreditorOrderLineClient>(new List<UnicontaBaseEntity> { o }, null);
+        var lines = await QueryPurchaseOrderLinesAsync(queryApi, o);
         return ProjectPurchaseOrder(o, lines);
     }
 
@@ -564,16 +597,14 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var invLines = await queryApi.Query<CreditorInvoiceLines>(new List<UnicontaBaseEntity> { inv }, null);
+            var invLines = await QueryPostedInvoiceLinesAsync(queryApi, inv);
             var invoice = ProjectPurchaseInvoice(inv, invLines);
 
             // A flagged invoice with no stock lines (e.g. a pure fee/charge invoice flagged by mistake)
             // would otherwise map to a JD shipment with zero lines. Skip it — never send an empty shipment.
             if (invoice.Lines.Count == 0)
             {
-                _logger.LogInformation(
-                    "Posted invoice {Invoice} (order {Order}) is flagged for JD but has no stock lines after filtering; skipping.",
-                    inv.InvoiceNumber, inv.OrderNumber);
+                await ReportNoStockLinesAsync(inv, cancellationToken);
                 continue;
             }
 
@@ -595,8 +626,85 @@ public class UnicontaRepository(UnicontaConnectionManager connectionManager, ILo
             .OrderByDescending(i => i.InvoiceNumber)
             .FirstOrDefault();
         if (inv == null) return null;
-        var invLines = await queryApi.Query<CreditorInvoiceLines>(new List<UnicontaBaseEntity> { inv }, null);
+        var invLines = await QueryPostedInvoiceLinesAsync(queryApi, inv);
         return ProjectPurchaseInvoice(inv, invLines);
+    }
+
+    /// <summary>
+    /// Detail lines for a booked (posted) purchase invoice.
+    ///
+    /// <para><b>2026-07-27 incident.</b> PO 43 was flagged and booked at ~14:47 but only reached JD at
+    /// 19:45 — five hours later, and only because the worker process happened to restart. Every tick in
+    /// between read the invoice header correctly (flag + status were visible) yet got <i>no stock lines</i>
+    /// back, so the order was skipped 51 times in a row. The lines were in Uniconta the whole time: a
+    /// fresh process read all three. The line query was the last read still using the null-filter
+    /// master/detail form, i.e. the SetCache path the header reads were moved off — an empty snapshot
+    /// taken while the booking was still settling stuck for the lifetime of the process. PO 39 had lost
+    /// 8½ hours to the same thing on 2026-07-21.</para>
+    ///
+    /// Master/detail is kept (it is what scopes the lines to this invoice); the filter is what moves the
+    /// query off the cached path. The standalone re-ask on an empty result is deliberate belt-and-braces:
+    /// "no lines" is precisely the shape of the stale read, and skipping an order because of it is what
+    /// made the incident invisible for hours.
+    /// </summary>
+    private static async Task<IEnumerable<CreditorInvoiceLines>> QueryPostedInvoiceLinesAsync(Uniconta.API.System.QueryAPI queryApi, CreditorInvoiceClient inv)
+    {
+        // Filter on the Uniconta order number, not the invoice number: the line-level InvoiceNumber is a
+        // 32-bit column while supplier invoice numbers can exceed it (observed: 302600122276), so an
+        // invoice-number filter silently matches nothing for those.
+        var filter = new[]
+        {
+            PropValuePair.GenereteWhereElements(nameof(CreditorInvoiceClient.OrderNumber), inv.OrderNumber, CompareOperator.Equal, typeof(int))
+        };
+
+        var lines = await queryApi.Query<CreditorInvoiceLines>(new List<UnicontaBaseEntity> { inv }, filter);
+        if (HasStockLine(lines)) return lines;
+
+        var reread = await queryApi.Query<CreditorInvoiceLines>(filter);
+        return HasStockLine(reread) ? reread : lines ?? Enumerable.Empty<CreditorInvoiceLines>();
+    }
+
+    private static bool HasStockLine(IEnumerable<CreditorInvoiceLines>? lines) =>
+        lines?.Any(l => !string.IsNullOrWhiteSpace(l.Item)
+                        && string.Equals(l.Group, StockLineGroup, StringComparison.OrdinalIgnoreCase)) == true;
+
+    // A flagged invoice we keep skipping is a stuck order, not a routine event, so it belongs in
+    // integration_logs — the 2026-07-27 incident produced 51 skips that existed only as Information-level
+    // App Insights traces, invisible to Supabase, dashboards and Hermes. Rate-limited per order so a
+    // genuinely fee-only invoice that stays flagged does not write a row every tick until it ages out of
+    // the 7-day window. In-memory, single-instance — same assumption as SyncScheduler.
+    private static readonly ConcurrentDictionary<int, DateTime> NoStockLineReportedUtc = new();
+    private static readonly TimeSpan NoStockLineReportCooldown = TimeSpan.FromHours(1);
+
+    private async Task ReportNoStockLinesAsync(CreditorInvoiceClient inv, CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            "Posted invoice {Invoice} (order {Order}) is flagged for JD but has no stock lines after filtering; skipping.",
+            inv.InvoiceNumber, inv.OrderNumber);
+
+        var now = DateTime.UtcNow;
+        var lastReported = NoStockLineReportedUtc.GetOrAdd(inv.OrderNumber, DateTime.MinValue);
+        if (now - lastReported < NoStockLineReportCooldown) return;
+        NoStockLineReportedUtc[inv.OrderNumber] = now;
+
+        // No IntegrationLogScope reaches the repository, so the correlation id is fresh per row — same
+        // trade-off as JdLogisticsService's cache-failure logging. external_id is the order number, which
+        // is what the sync's success path passes to MarkResolvedAsync, so this row auto-resolves once the
+        // order does go through.
+        await integrationLogger.LogAsync(new IntegrationLogEntry(
+            integrationLogger.IntegrationName,
+            "warning",
+            "Uniconta",
+            inv.OrderNumber.ToString(),
+            $"Posted invoice {inv.InvoiceNumber} (order {inv.OrderNumber}) is flagged for JD but has no stock lines; it is being skipped every tick and will not reach JD.",
+            null,
+            null)
+        {
+            CorrelationId = Guid.NewGuid(),
+            ErrorCode = "UNICONTA_NO_STOCK_LINES",
+            Retryable = false,
+            SuggestedAction = "Check the invoice lines in Uniconta: only lines in group 'Stock' are sent to JD. If the lines look right, this is the stale-read symptom from the 2026-07-27 incident — restart the Function App and re-check."
+        }, cancellationToken);
     }
 
     private static LocalPurchaseInvoice ProjectPurchaseInvoice(CreditorInvoiceClient inv, IEnumerable<CreditorInvoiceLines>? lines)
