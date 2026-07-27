@@ -93,12 +93,25 @@ A service sent to a product that does not list it makes JD reject the whole requ
 | `carrier` | **Speditør** (`xCarrier`) | `Carrier` | `"TBD"` if blank. |
 | `notificationEmails` | — | — | Hardcoded `"mb@nerotrade.dk"`. |
 | `disableApprovalEmail` | — | — | Always `false`. |
-| container **parent** line | **Enhedstype** (`xEnhedstype`) + **Antal enheder** (`xAntalEnheder`) | `ContainerType`, `ContainerCount` | Only when **both** set: emit a pure-container parent line (`isSubItem=false`, `unit=ContainerType`, no SKU) added **first**, so product lines hang under it. |
+| container **parent** line | **Enhedstype** (`xEnhedstype`) + **Antal enheder** (`xAntalEnheder`) | `ContainerType`, `ContainerCount` | Only when **both** set: emit a pure-container parent line (`isSubItem=false`, `unit=ContainerType` through `UnitTranslator`, no SKU) added **first**, so product lines hang under it. `xEnhedstype` is free text already typed in Danish ("Palle"), so the translation is normally a no-op. |
 | `lines[].quantity` | line **antal** (`_Qty`) | `Lines[].Quantity` | Rounded to int. |
 | `lines[].isSubItem` | — | — | `true` when a container parent exists, else `false` (flat list). |
 | `lines[].externalIdentification` | line **`xExternalSku`** | `Lines[].CustomerItemNumber` | Blank → `null`. |
 | `lines[].Sku` *(internal)* | line **vare** (`_Item`) | `Lines[].Sku` | `[JsonIgnore]` — resolved to `catalog.id` against JD's catalog in `JdLogisticsService`; never serialised. A line that cannot resolve must fail loudly, not ship with a bogus id. |
-| `lines[].unit` *(internal)* | line **enhed** (`Unit`) / container type | `Lines[].Unit` | `[JsonIgnore]` — matched to JD container types to fill `inventoryContainerType`; never serialised. |
+| `lines[].unit` *(internal)* | line **enhed** (`Unit`) / container type | `Lines[].Unit` | `[JsonIgnore]` — **translated to JD's container-type naming by `UnitTranslator`**, then matched to JD container types to fill `inventoryContainerType`; never serialised. |
+
+#### Unit → JD container type (`UnitTranslator`)
+
+Uniconta returns a line's unit as the **English** `ItemUnit` enum name; JD names its container types with the **Danish** label the Uniconta UI shows the user. Both directions of a name match must therefore be translated — an untranslated unit falls back to Stk.
+
+| Uniconta `Unit` (enum name) | Uniconta UI (dansk) | JD container type | JD id |
+|---|---|---|---|
+| `Pcs` | Stk | `Stk` | 15 |
+| `Packages` | Kolli | `Kolli` | 13 |
+| `Pallet` | Palle | `Palle` | 3 |
+| `Container` | Container | `Container` | 1 |
+
+Anything else passes through unchanged (so free-text `xEnhedstype` keeps working). A unit that still matches no JD container type is sent as **Stk** and logged as `JD_CONTAINER_TYPE_UNMAPPED` (warning, not retryable) — never silently.
 
 ### 2a. Safety-net: posted purchase invoice → JD Incoming Shipment
 
@@ -139,6 +152,7 @@ All write-backs go through `UnicontaService` and are **skipped under DryRun** (s
 
 Add a dated entry for **every** mapping change. Newest first.
 
+- **2026-07-27** — Purchase-order line **unit** is now translated to JD's container-type naming (`UnitTranslator`, new table under §2) instead of being compared raw. Uniconta hands us the **English** `ItemUnit` enum name (`"Packages"`, `"Pcs"`, `"Pallet"`), JD names its container types in **Danish** (`Kolli`, `Stk`, `Palle` — the same labels the Uniconta UI shows), so `SetContainerTypesAsync`'s exact-name match never hit and **every** product line fell back to the `Stk` default. Confirmed in production: PO 33/37/39 all carry `Unit = "Packages"` (= Kolli) in Uniconta and were registered in JD as `Stk`; 33 of the then-open purchase-order lines were `Packages`. Translation happens in `PurchaseOrderMapper` (so `/inspect/purchase-order/{n}` shows the value that will actually be matched) and is applied to both the product lines and the `xEnhedstype` container parent — unknown units pass through unchanged, so the free-text Danish parent is unaffected. Second half of the fix: an unresolvable unit still degrades to `Stk` (JD requires a container type) but now emits a `JD_CONTAINER_TYPE_UNMAPPED` warning to `integration_logs` — the old silent fallback is what let this run unnoticed. Reverse direction (`SyncReceivedQuantityToUniconta`) unchanged; JD's catalog API has **no** unit field, so a unit can only ever ride on a shipment line, never on the item card.
 - **2026-07-22** — Posted-invoice **safety-net** (`SyncPostedPurchaseInvoicesToJd`) reaches **full parity** with the open-order path (new §2a). Previously it hardcoded `carrier = "TBD"`, had **no container logic** (everything shipped as flat "stk", never a kolli/pallet parent), suppressed notifications (`notificationEmails = null`, `disableApprovalEmail = true`) and forced bare `text = "PO {n}"` (dropping the remark). Root cause was a separate, reduced-fidelity `Map(LocalPurchaseInvoice)`. Fix: both mapper overloads now delegate to one shared `PurchaseOrderMapper.BuildIncomingShipment(...)`, so carrier (`xCarrier`), container parent (`xEnhedstype`/`xAntalEnheder`), remark (`xRemarksForJD`), notification/approval fields and line structure are identical **by construction**. `LocalPurchaseInvoice` now carries those header fields; `ReadPostedPurchaseInvoicesAsync` reads them off `CreditorInvoiceClient` (same user fields as the open-order read). `LocalPurchaseInvoiceLine.IsSubItem` removed (now derived from whether a container parent exists, like the PO path). **Behavioural note:** safety-net shipments now trigger the same JD approval/notification emails as normal ones (deliberate — "match the normal path always").
 - **2026-07-15** — Sales-order `SO {n}` machine key **moved off `text` onto `trackingNote`**, appended after the Sporingsnote as `"{Sporingsnote} / SO {n}"` (bare `"SO {n}"` when the Sporingsnote is blank). `text` now carries the `xRemarksForJD` remark **only** (blank → `null`). The Sporingsnote is trimmed as needed to keep the key whole within JD's **30-char `trackingNote` cap** (verified against the JD swagger: "Max: 30 Chars … Shipping Label") — a silent truncation of the key would break dedup. `JdOrderHelper.GetOrderNumberString`/`GetOrderNumber` gained a `trackingNote` parameter and parse it **first** (end-anchored), falling back to `text` then `deliveryNoteText` so already-sent (in-flight) orders keyed on `text` still match and are **not** re-sent. Dedup (`JdLogisticsService.UpsertRequestOrdersAsync`), status sync (`SyncRequestOrderStatusToUniconta`), and the delete/get sales-order admin endpoints all updated to pass `trackingNote`. Purchase-order path (`PO {n}` on `text`) unchanged. Source field for the number is the Uniconta SDK's `DebtorOrderClient.OrderNumber`.
 - **2026-06-17** — Sales-order `contactPerson.name` now sourced from `DeliveryContactPerson` (was `DeliveryName`, which wrongly put the location name in JD's contact field). `contactPerson.email`/`telephone*` normalised to `null` when blank. (`DeliveryContactEmail`→email, `DeliveryPhone`→phone unchanged.)

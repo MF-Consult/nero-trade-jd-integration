@@ -300,6 +300,7 @@ Convention: `SUBSYSTEM_REASON`, SCREAMING_SNAKE. Extend freely — new codes don
 | `JD_5XX`                      | JD returned a server error.                                                             |
 | `JD_VALIDATION_REJECTED`      | JD accepted the request but rejected the payload. **Not retryable** — data fix needed.  |
 | `JD_LOOKUP_MISS`              | JD returned 404 for an expected record.                                                 |
+| `JD_CONTAINER_TYPE_UNMAPPED`  | An incoming-shipment line's unit matched no JD container type; the line shipped as `Stk`. **Not retryable** — add the translation in `UnitTranslator` or the container type in JD. |
 | `UNICONTA_DUPLICATE_SO`       | Multiple SOs collide on the same number.                                                |
 | `UNICONTA_LOOKUP_MISS`        | Expected Uniconta record absent.                                                        |
 | `UNICONTA_CRUD_FAILED`        | Generic Uniconta write rejected (usually transient). Use the more specific codes below when they apply. |

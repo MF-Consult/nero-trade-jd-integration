@@ -492,6 +492,16 @@ public sealed class JdLogisticsService(
         return unresolved;
     }
 
+    /// <summary>
+    /// Resolves each line's <c>inventoryContainerType</c> from its unit name. The unit reaching this
+    /// method is already translated to JD's Danish container-type naming by
+    /// <see cref="UnicontaHandler.Mappers.UnitTranslator"/> — Uniconta's own value is the English
+    /// <c>ItemUnit</c> enum name and would never match.
+    ///
+    /// A unit with no matching JD container type still falls back to "Stk" (JD needs *some* container
+    /// type), but that fallback is now reported instead of silent: an unmapped unit used to look
+    /// exactly like a correct sync while the warehouse registered kolli/pallets as loose pieces.
+    /// </summary>
     private async Task SetContainerTypesAsync(JdIncomingShipmentCreate shipment, CancellationToken cancellationToken)
     {
         if (shipment.lines.Count == 0) return;
@@ -499,22 +509,47 @@ public sealed class JdLogisticsService(
         {
             if (line.inventoryContainerType != null) continue;
 
-            if (line.unit == null) await SetDefaultContainerTypeAsync(shipment, cancellationToken);
-    
-            var containerType = _containerTypes.FirstOrDefault(ct => string.Equals(ct.name, line.unit, StringComparison.OrdinalIgnoreCase))
-                ?? await SetDefaultContainerTypeAsync(shipment, cancellationToken);
-            
+            var containerType = _containerTypes?.FirstOrDefault(ct => string.Equals(ct.name, line.unit, StringComparison.OrdinalIgnoreCase));
+            if (containerType == null)
+            {
+                if (!string.IsNullOrWhiteSpace(line.unit))
+                    await LogUnmappedUnitAsync(shipment, line, cancellationToken);
+                containerType = DefaultContainerType();
+            }
+
             if (containerType == null) continue;
-            
+
             line.inventoryContainerType = new JdIncomingShipmentContainerTypeRef { id = containerType.id };
         }
     }
 
-    private async Task<JdContainerType?> SetDefaultContainerTypeAsync(JdIncomingShipmentCreate shipment, CancellationToken cancellationToken)
+    private JdContainerType? DefaultContainerType()
+        => _containerTypes?.FirstOrDefault(ct => string.Equals(ct.name, "Stk", StringComparison.OrdinalIgnoreCase));
+
+    private Task LogUnmappedUnitAsync(JdIncomingShipmentCreate shipment, JdIncomingLine line, CancellationToken cancellationToken)
     {
-        var containerType = _containerTypes.FirstOrDefault(ct => string.Equals(ct.name, "Stk", StringComparison.OrdinalIgnoreCase));
-        if (containerType == null) return null;
-        return containerType;
+        var known = string.Join(", ", (_containerTypes ?? []).Select(ct => ct.name));
+        _logger.LogWarning(
+            "Unit '{Unit}' on shipment '{Text}' (SKU {Sku}) matches no JD container type ({Known}); falling back to Stk",
+            line.unit, shipment.text, line.Sku ?? "container parent", known);
+
+        // No IntegrationLogScope reaches this layer, so the correlation id is fresh per row — same
+        // trade-off as LoadWithFailureLoggingAsync. external_id carries "PO {n}" so the row is still
+        // traceable to the order.
+        return integrationLogger.LogAsync(new IntegrationLogEntry(
+            supabaseOptions.IntegrationName,
+            "warning",
+            "JD",
+            shipment.text,
+            $"Unit '{line.unit}' (SKU {line.Sku ?? "container parent"}) has no matching JD container type. Known types: {known}. The line was sent as Stk.",
+            null,
+            null)
+        {
+            CorrelationId = Guid.NewGuid(),
+            ErrorCode = "JD_CONTAINER_TYPE_UNMAPPED",
+            Retryable = false,
+            SuggestedAction = "Data/mapping issue, not transient. Either the Uniconta unit needs a translation in UnitTranslator or JD needs that container type. The shipment was created with Stk in the meantime."
+        }, cancellationToken);
     }
 
     /// <summary>

@@ -76,7 +76,9 @@ public sealed class PurchaseOrderMapper
                 quantity = (int)Math.Round(containerCount!.Value),
                 isSubItem = false,
                 Sku = null,
-                unit = containerType!.Trim()
+                // xEnhedstype is free text already typed in Danish ("Palle"), so the translation is a
+                // no-op here — it only kicks in if someone types the Uniconta enum name instead.
+                unit = UnitTranslator.ToJdContainerTypeName(containerType)
             });
         }
 
@@ -95,7 +97,11 @@ public sealed class PurchaseOrderMapper
                 // solely via catalog.id, so it is resolved against JD's catalog in
                 // JdLogisticsService before the shipment is sent. A line that cannot be resolved
                 // must fail loudly rather than be sent with a bogus id (JD would register "Ukendt").
-                unit = line.Unit
+                //
+                // Uniconta hands us the English ItemUnit enum name ("Packages"), JD names its container
+                // types in Danish ("Kolli") — translate here so the downstream name match can succeed.
+                // See UnitTranslator.
+                unit = UnitTranslator.ToJdContainerTypeName(line.Unit)
             });
         }
         return create;
