@@ -29,8 +29,8 @@ public class UnicontaRepository(
     public async IAsyncEnumerable<LocalDebtor> ReadAllDebtorsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
-        // No filters -> fetch all
-        var debtors = await Timed(queryApi.Query<DebtorClient>((IEnumerable<PropValuePair>?)null), "Query<DebtorClient>");
+        // Every debtor — but read through MatchAllFilter, never Query<T>(null); see that helper.
+        var debtors = await Timed(queryApi.Query<DebtorClient>(MatchAllFilter()), "Query<DebtorClient>");
         foreach (var d in (debtors ?? Enumerable.Empty<DebtorClient>()).Where(d => d != null && d.GetUserFieldBoolean(UnicontaUserFields.DebtorTransferFlag)))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -51,7 +51,7 @@ public class UnicontaRepository(
     public async IAsyncEnumerable<LocalInventoryItem> ReadAllItemsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
-        var items = await Timed(queryApi.Query<InvItemClient>((IEnumerable<PropValuePair>?)null), "Query<InvItemClient>");
+        var items = await Timed(queryApi.Query<InvItemClient>(MatchAllFilter()), "Query<InvItemClient>");
         foreach (var i in (items ?? Enumerable.Empty<InvItemClient>()).Where(i => i != null && i.GetUserFieldBoolean(UnicontaUserFields.ItemTransferFlag)))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -70,19 +70,28 @@ public class UnicontaRepository(
         }
     }
 
-    // Matches every real purchase order (order numbers are 1-based), so the row set is identical to the
-    // unfiltered query — the point is purely the code path. Query<T>(null) opts into SetCache=true and can
-    // serve a stale session snapshot; a filtered query re-asks the server. Same reason the sales-order and
-    // posted-invoice reads are filtered. See the 2026-07-27 incident note on QueryPostedInvoiceLinesAsync.
-    private static PropValuePair[] AllPurchaseOrdersFilter() =>
+    /// <summary>
+    /// A filter that matches every row — <c>RowId</c> is Uniconta's internal row id and is always positive.
+    ///
+    /// It exists purely to keep reads off the <c>Query&lt;T&gt;(null)</c> code path, which opts into
+    /// <c>SetCache=true</c> and can serve a stale session snapshot that only a process restart clears (see
+    /// the incident note on <see cref="QueryPostedInvoiceLinesAsync"/>). Passing it changes the code path,
+    /// never the result: verified live on 2026-07-27 against every table this repository reads —
+    /// debtors 143=143, items 832=832, purchase orders 7=7, sales orders 5=5, and on the master/detail form
+    /// sales-order lines 23=23 and purchase-order lines 53=53, filtered vs unfiltered.
+    ///
+    /// Use it anywhere a read would otherwise pass <c>null</c>, including as the detail filter of a
+    /// master/detail query.
+    /// </summary>
+    private static PropValuePair[] MatchAllFilter() =>
     [
-        PropValuePair.GenereteWhereElements(nameof(CreditorOrderClient.OrderNumber), 0, CompareOperator.GreaterThan, typeof(int))
+        PropValuePair.GenereteWhereElements("RowId", 0, CompareOperator.GreaterThan, typeof(int))
     ];
 
     public async IAsyncEnumerable<LocalPurchaseOrder> ReadAllPurchaseOrdersAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
-        var orders = await Timed(queryApi.Query<CreditorOrderClient>(AllPurchaseOrdersFilter()), "Query<CreditorOrderClient>");
+        var orders = await Timed(queryApi.Query<CreditorOrderClient>(MatchAllFilter()), "Query<CreditorOrderClient>");
         foreach (var o in (orders ?? Enumerable.Empty<CreditorOrderClient>()).Where(o => o != null && o.GetUserFieldBoolean(UnicontaUserFields.PurchaseOrderTransferFlag) && PurchaseOrderJdStatusValues.IsPending(o.GetUserField(UnicontaUserFields.PurchaseOrderJdStatus) as string)))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -220,13 +229,13 @@ public class UnicontaRepository(
             yield break;
 
         // Load master data once up front instead of one query per order / per item (avoids N+1 traffic to Uniconta).
-        var debtors = await Timed(queryApi.Query<DebtorClient>((IEnumerable<PropValuePair>?)null), "Query<DebtorClient>");
+        var debtors = await Timed(queryApi.Query<DebtorClient>(MatchAllFilter()), "Query<DebtorClient>");
         var debtorsByAccount = (debtors ?? Enumerable.Empty<DebtorClient>())
             .Where(d => !string.IsNullOrEmpty(d?.Account))
             .GroupBy(d => d!.Account!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-        var items = await Timed(queryApi.Query<InvItemClient>((IEnumerable<PropValuePair>?)null), "Query<InvItemClient>");
+        var items = await Timed(queryApi.Query<InvItemClient>(MatchAllFilter()), "Query<InvItemClient>");
         var itemTypeBySku = (items ?? Enumerable.Empty<InvItemClient>())
             .Where(i => !string.IsNullOrEmpty(i?.Item))
             .GroupBy(i => i!.Item!, StringComparer.OrdinalIgnoreCase)
@@ -236,7 +245,7 @@ public class UnicontaRepository(
         // Previously this loop did `Query<DebtorOrderLineClient>(new List{o}, null)` per order which
         // dominated the per-tick latency once more than a handful of orders were pending.
         var allMasters = filteredOrders.Cast<UnicontaBaseEntity>().ToList();
-        var allLines = await Timed(queryApi.Query<DebtorOrderLineClient>(allMasters, null), "Query<DebtorOrderLineClient>");
+        var allLines = await Timed(queryApi.Query<DebtorOrderLineClient>(allMasters, MatchAllFilter()), "Query<DebtorOrderLineClient>");
         // DebtorOrderLineClient._OrderRowId is the FK back to DebtorOrderClient.RowId.
         var linesByOrderRowId = (allLines ?? Enumerable.Empty<DebtorOrderLineClient>())
             .Where(l => l != null)
@@ -274,13 +283,13 @@ public class UnicontaRepository(
                 .FirstOrDefault(d => d != null && string.Equals(d.Account, o.Account, StringComparison.OrdinalIgnoreCase));
         }
 
-        var items = await Timed(queryApi.Query<InvItemClient>((IEnumerable<PropValuePair>?)null), "Query<InvItemClient>");
+        var items = await Timed(queryApi.Query<InvItemClient>(MatchAllFilter()), "Query<InvItemClient>");
         var itemTypeBySku = (items ?? Enumerable.Empty<InvItemClient>())
             .Where(i => !string.IsNullOrEmpty(i?.Item))
             .GroupBy(i => i!.Item!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => (int)g.First()._ItemType, StringComparer.OrdinalIgnoreCase);
 
-        var lines = await Timed(queryApi.Query<DebtorOrderLineClient>(new List<UnicontaBaseEntity> { o }, null), "Query<DebtorOrderLineClient>");
+        var lines = await Timed(queryApi.Query<DebtorOrderLineClient>(new List<UnicontaBaseEntity> { o }, MatchAllFilter()), "Query<DebtorOrderLineClient>");
         return ProjectSalesOrder(o, debtor, lines?.ToList(), itemTypeBySku);
     }
 
@@ -367,7 +376,7 @@ public class UnicontaRepository(
     {
         var queryApi = await connectionManager.CreateQueryApiAsync();
         // Fetch all orders - we need to scan them to match with JD
-        var orders = await Timed(queryApi.Query<DebtorOrderClient>((IEnumerable<PropValuePair>?)null), "Query<DebtorOrderClient>");
+        var orders = await Timed(queryApi.Query<DebtorOrderClient>(MatchAllFilter()), "Query<DebtorOrderClient>");
 
         foreach (var o in (orders ?? Enumerable.Empty<DebtorOrderClient>()).Where(o => o != null))
         {
@@ -474,7 +483,7 @@ public class UnicontaRepository(
 
             // 2. Find the line
             var masters = new List<UnicontaBaseEntity> { order };
-            var lines = await Timed(queryApi.Query<CreditorOrderLineClient>(masters, null), "Query<CreditorOrderLineClient>");
+            var lines = await Timed(queryApi.Query<CreditorOrderLineClient>(masters, MatchAllFilter()), "Query<CreditorOrderLineClient>");
             var line = (lines ?? Enumerable.Empty<CreditorOrderLineClient>()).FirstOrDefault(l => string.Equals(l._Item, sku, StringComparison.OrdinalIgnoreCase));
 
             if (line == null)

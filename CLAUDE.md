@@ -127,9 +127,14 @@ only reached JD after a deploy restarted the worker. PO 39 lost 8½ hours to the
 
 **Every SDK call must also be wrapped in `UnicontaRepository.Timed(...)`** (→ `UnicontaConnectionManager.RunWithTimeoutAsync`). The SDK takes no `CancellationToken` and sets no timeout, so a call against a dead socket never returns: 14 invocations in the 30 days to 2026-07-27 sat on one until the Function App's 30-minute `FunctionTimeout` killed them, each blocking that sync's timer for the full half hour (timer triggers are singleton) and ending in a forced worker restart. `UnicontaConfig.TimeoutSeconds` — dead config until then — now bounds each call; on timeout the session is invalidated and the tick is skipped with a warning.
 
-If you add a Uniconta read: pass a filter, wrap it in `Timed`, and never treat "zero detail rows" as fact without a re-ask.
-`ReadAllItemsAsync` / `ReadAllDebtorsAsync` are the remaining unfiltered reads (string-keyed tables, no
-match-all filter established yet) — fix them the same way if they ever show the symptom.
+Every read in `UnicontaRepository` now passes a filter — including the ones that genuinely want all rows,
+via `MatchAllFilter()` (`RowId > 0`; `RowId` is Uniconta's internal row id and always positive). It changes
+the code path, never the result: verified live per table (debtors 143=143, items 832=832, purchase orders
+7=7, sales orders 5=5, sales-order lines 23=23, purchase-order lines 53=53). It also works as the **detail**
+filter of a master/detail query, which is the form that caused the PO 43 incident.
+
+If you add a Uniconta read: pass a filter (`MatchAllFilter()` if you want everything), wrap it in `Timed`,
+and never treat "zero detail rows" as fact without a re-ask.
 
 ### Monitoring & remediation contract
 
