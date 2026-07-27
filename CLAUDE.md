@@ -125,7 +125,9 @@ Two production incidents came from this, both invisible until a restart happened
 header fresh every tick while its *lines* came back empty for ~5 hours, so the order was skipped 51 times and
 only reached JD after a deploy restarted the worker. PO 39 lost 8½ hours to the same thing on 2026-07-21.
 
-If you add a Uniconta read: pass a filter, and never treat "zero detail rows" as fact without a re-ask.
+**Every SDK call must also be wrapped in `UnicontaRepository.Timed(...)`** (→ `UnicontaConnectionManager.RunWithTimeoutAsync`). The SDK takes no `CancellationToken` and sets no timeout, so a call against a dead socket never returns: 14 invocations in the 30 days to 2026-07-27 sat on one until the Function App's 30-minute `FunctionTimeout` killed them, each blocking that sync's timer for the full half hour (timer triggers are singleton) and ending in a forced worker restart. `UnicontaConfig.TimeoutSeconds` — dead config until then — now bounds each call; on timeout the session is invalidated and the tick is skipped with a warning.
+
+If you add a Uniconta read: pass a filter, wrap it in `Timed`, and never treat "zero detail rows" as fact without a re-ask.
 `ReadAllItemsAsync` / `ReadAllDebtorsAsync` are the remaining unfiltered reads (string-keyed tables, no
 match-all filter established yet) — fix them the same way if they ever show the symptom.
 
@@ -147,6 +149,7 @@ Quick rules for in-session edits:
 - `JD_VALIDATION_REJECTED` — JD accepted the request but rejected the payload (not retryable; needs data fix)
 - `JD_LOOKUP_MISS` — JD returned 404 for a record we expected
 - `JD_CONTAINER_TYPE_UNMAPPED` — a line's unit matched no JD container type; the line shipped as `Stk`. Not retryable — either add the translation in `UnitTranslator` or add the type in JD.
+- `UNICONTA_TIMEOUT` — a Uniconta SDK call did not answer within `UnicontaConfig.TimeoutSeconds`. **Warning**, retryable; the session is invalidated and the next tick reconnects.
 - `UNICONTA_CONNECT_FAILED` — Uniconta unreachable for this tick (usually `OpenCompany` returning no company for a valid id). Written at **warning** level, not error: nothing is actionable and the next tick reconnects. The sync returns instead of throwing, so the invocation is not marked failed either.
 - `UNICONTA_NO_STOCK_LINES` — a posted purchase invoice is flagged for JD but yields no `Stock` lines, so it is skipped every tick. Not retryable; either the lines really are fee-only, or it is the stale-read symptom below.
 - `UNICONTA_DUPLICATE_SO`, `UNICONTA_LOOKUP_MISS`, `UNICONTA_CRUD_FAILED`, `UNICONTA_ORDER_STATUS_FAILED`, `UNICONTA_AUTH_FAILED` — Uniconta-side. `UNICONTA_ORDER_STATUS_FAILED` is for sales-order Group/user-field update failures specifically (Created/Fejlet on push, JD→Uniconta status sync); other Uniconta writes keep `UNICONTA_CRUD_FAILED`.

@@ -139,6 +139,46 @@ public sealed class UnicontaConnectionManager : IDisposable
         return _connection;
     }
 
+    /// <summary>
+    /// Bounds the wait on a Uniconta SDK call. The SDK accepts no <see cref="CancellationToken"/> and sets
+    /// no timeout of its own, so a call against a dead socket never returns — that is what produced the
+    /// 30-minute hung invocations (14 in the 30 days to 2026-07-27), each of which blocked its sync's timer
+    /// for the full half hour and ended in a forced worker restart.
+    ///
+    /// We cannot abort the SDK call, only stop waiting on it: on timeout the connection is invalidated so
+    /// the next tick reconnects on a fresh session, the abandoned task's eventual outcome is observed (so a
+    /// late failure cannot surface as an unobserved task exception), and
+    /// <see cref="UnicontaCallTimeoutException"/> is thrown — which the syncs treat as "Uniconta not usable
+    /// this tick": warning, skip, retry on the next tick.
+    /// </summary>
+    /// <param name="timeout">Overrides the configured <c>UnicontaConfig.TimeoutSeconds</c>. Tests only.</param>
+    public async Task<T> RunWithTimeoutAsync<T>(Task<T> sdkCall, string operation, TimeSpan? timeout = null)
+    {
+        timeout ??= TimeSpan.FromSeconds(Math.Max(5, _config.TimeoutSeconds));
+        if (await Task.WhenAny(sdkCall, Task.Delay(timeout.Value)) == sdkCall)
+            return await sdkCall;
+
+        // Never let the abandoned call's exception go unobserved.
+        _ = sdkCall.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+
+        _logger.LogWarning(
+            "Uniconta call '{Operation}' exceeded {TimeoutSeconds}s; abandoning the wait and forcing a reconnect on the next call",
+            operation, timeout.Value.TotalSeconds);
+        InvalidateConnection();
+        throw new UnicontaCallTimeoutException(operation, timeout.Value);
+    }
+
+    /// <summary>
+    /// Marks the current session unusable without waiting on the connect gate — a timed-out call has left
+    /// the session in an unknown state, so the next <see cref="EnsureConnectedAsync"/> must rebuild it.
+    /// </summary>
+    private void InvalidateConnection()
+    {
+        _isLoggedIn = false;
+        _session = null;
+        _company = null;
+    }
+
     public async Task<CrudAPI> CreateCrudApiAsync()
     {
         await EnsureConnectedAsync();
@@ -204,13 +244,13 @@ public sealed class UnicontaConnectionManager : IDisposable
             if (!Guid.TryParse(_config.ApiKey, out var apiKeyGuid))
                 throw new InvalidOperationException("Uniconta ApiKey is not a valid GUID");
 
-            var loginResult = await _session.LoginAsync(
+            var loginResult = await RunWithTimeoutAsync(_session.LoginAsync(
                 _config.Username,
                 _config.Password,
                 LoginType.API,
                 apiKeyGuid,
                 default(Language),
-                null);
+                null), "LoginAsync");
             _isLoggedIn = loginResult == ErrorCodes.Succes;
             if (!_isLoggedIn)
                 throw new InvalidOperationException($"Failed to login to Uniconta API: {loginResult}");
@@ -259,7 +299,7 @@ public sealed class UnicontaConnectionManager : IDisposable
             Exception? failure = null;
             try
             {
-                company = await _session!.OpenCompany(_config.CompanyId, true);
+                company = await RunWithTimeoutAsync(_session!.OpenCompany(_config.CompanyId, true), "OpenCompany");
             }
             catch (Exception ex)
             {

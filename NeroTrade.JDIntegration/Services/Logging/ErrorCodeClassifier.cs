@@ -16,6 +16,18 @@ public static class ErrorCodeClassifier
 {
     public static ClassifiedError Classify(Exception ex)
     {
+        // A Uniconta SDK call blew its per-call timeout. Checked before the base type below so it keeps its
+        // own code — the distinction matters: unavailable = Uniconta said no, timeout = Uniconta said
+        // nothing at all, which is the shape that used to hang an invocation for 30 minutes.
+        if (ex is UnicontaCallTimeoutException timeout)
+        {
+            return new ClassifiedError(
+                "UNICONTA_TIMEOUT",
+                Retryable: true,
+                SuggestedAction: $"Uniconta call '{timeout.Operation}' did not answer within {timeout.Timeout.TotalSeconds:0}s. The session was invalidated and the next tick reconnects. Investigate only if it repeats across many ticks.",
+                Level: "warning");
+        }
+
         // Uniconta was unreachable for this tick (typically OpenCompany returning no company for a valid
         // id). Nothing to fix on our side and the next tick reconnects, so it is a warning, not an error.
         if (ex is UnicontaConnectionUnavailableException)
