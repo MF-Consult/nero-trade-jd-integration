@@ -199,7 +199,7 @@ Defaults (see `Models/Settings/SyncSchedulingOptions.cs`) — day window **07–
 
 | Job (config key) | Day | Night |
 |---|---|---|
-| `SalesOrders` | 50 s | 5 min |
+| `SalesOrders` | 90 s | 5 min |
 | `PurchaseOrders` | 72 s | 30 min |
 | `PostedPurchaseInvoices` | 72 s | 30 min |
 | `RequestOrderStatus` | 10 min | 30 min |

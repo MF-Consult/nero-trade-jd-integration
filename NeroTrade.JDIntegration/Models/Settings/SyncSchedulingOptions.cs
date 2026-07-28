@@ -52,7 +52,11 @@ public sealed class SyncSchedulingOptions
     /// </summary>
     public Dictionary<string, JobCadence> Jobs { get; init; } = new()
     {
-        ["SalesOrders"] = new JobCadence { DaySeconds = 50, NightSeconds = 300 },
+        // 90 s, aligned with the two purchase jobs. Slowed from 50 s (60 s effective) on 2026-07-28 to get
+        // clear of the daily call ceiling. Note the saving is smaller than run count alone suggests: with a
+        // 150 s session age, a 60 s job reuses its session twice before reconnecting (1.67 calls/run) while
+        // a 90 s job reuses it once (2.0), so 300 fewer runs saves ~300 calls, not ~600.
+        ["SalesOrders"] = new JobCadence { DaySeconds = 90, NightSeconds = 300 },
         ["PurchaseOrders"] = new JobCadence { DaySeconds = 72, NightSeconds = 1800 },
         // Same day cadence as PurchaseOrders on purpose: a booked-before-flagged purchase order is caught
         // only by this safety-net, so it should not wait five times longer than the normal path. With the
