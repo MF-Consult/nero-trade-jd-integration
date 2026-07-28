@@ -199,7 +199,7 @@ Defaults (see `Models/Settings/SyncSchedulingOptions.cs`) — day window **07–
 
 | Job (config key) | Day | Night |
 |---|---|---|
-| `SalesOrders` | 90 s | 5 min |
+| `SalesOrders` | 60 s | 5 min |
 | `PurchaseOrders` | 72 s | 30 min |
 | `PostedPurchaseInvoices` | 72 s | 30 min |
 | `RequestOrderStatus` | 10 min | 30 min |
@@ -207,7 +207,9 @@ Defaults (see `Models/Settings/SyncSchedulingOptions.cs`) — day window **07–
 | `ReceivedQuantity` | 30 min | 60 min |
 | Uniconta session max age | 150 s | 15 min |
 
-Changed 2026-07-28: `PostedPurchaseInvoices` 5 min → 72 s (its heartbeat also went 60 s → 30 s so the
+Changed 2026-07-28: `SalesOrders` briefly went 60 → 90 s while the call budget was over its ceiling and
+is now back at 60 s — `SyncDispatcher` removed the cause (see the one-timer caveat below), leaving ~40%
+headroom. `PostedPurchaseInvoices` 5 min → 72 s (its heartbeat also went 60 s → 30 s so the
 cadence can be expressed), matching the open-order path — a purchase order booked before it was flagged is
 caught *only* by that safety-net. Session max age 90 s → 150 s to pay for it: each recycle is a Login + an
 OpenCompany, and those handshakes measured **~56% of the entire daily call volume** (~2.900 of ~5.200).

@@ -52,11 +52,10 @@ public sealed class SyncSchedulingOptions
     /// </summary>
     public Dictionary<string, JobCadence> Jobs { get; init; } = new()
     {
-        // 90 s, aligned with the two purchase jobs. Slowed from 50 s (60 s effective) on 2026-07-28 to get
-        // clear of the daily call ceiling. Note the saving is smaller than run count alone suggests: with a
-        // 150 s session age, a 60 s job reuses its session twice before reconnecting (1.67 calls/run) while
-        // a 90 s job reuses it once (2.0), so 300 fewer runs saves ~300 calls, not ~600.
-        ["SalesOrders"] = new JobCadence { DaySeconds = 90, NightSeconds = 300 },
+        // Back to 60 s on 2026-07-28. It was briefly slowed to 90 s as a stopgap while the call budget was
+        // over its ceiling; SyncDispatcher removed the cause (six timers meant six Uniconta sessions), so
+        // the budget now has ~40% headroom and the fastest sync no longer has to pay for it.
+        ["SalesOrders"] = new JobCadence { DaySeconds = 60, NightSeconds = 300 },
         ["PurchaseOrders"] = new JobCadence { DaySeconds = 72, NightSeconds = 1800 },
         // Same day cadence as PurchaseOrders on purpose: a booked-before-flagged purchase order is caught
         // only by this safety-net, so it should not wait five times longer than the normal path. With the
