@@ -31,14 +31,9 @@ public sealed class SyncPostedPurchaseInvoicesToJd(
     IIntegrationLogger integrationLogger,
     ILogger<SyncPostedPurchaseInvoicesToJd> logger)
 {
-    // Heartbeat only — the real day/night cadence is enforced by SyncScheduler ("PostedPurchaseInvoices"
-    // cadence in SyncScheduling config). Non-due ticks return before any Uniconta call.
-    //
-    // 30 s, not 60: the heartbeat quantizes the configured cadence upwards, so with a one-minute heartbeat
-    // the 72 s day cadence would land on 120 s instead of the ~90 s the open-order path runs at. Change the
-    // cadence in config; this cron only bounds how finely that cadence can be expressed.
-    [Function("SyncPostedPurchaseInvoicesToJd")]
-    public async Task RunAsync([TimerTrigger("*/30 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    // Invoked by SyncDispatcher, not by its own timer — see that class. The scheduler gate below
+    // still decides whether this tick does any work, so the configured cadence is unchanged.
+    public async Task RunAsync(CancellationToken cancellationToken)
     {
         if (!scheduler.TryBeginRun("PostedPurchaseInvoices", DateTime.UtcNow)) return;
 

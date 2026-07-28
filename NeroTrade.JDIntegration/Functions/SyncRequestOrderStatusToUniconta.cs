@@ -22,11 +22,9 @@ public sealed class SyncRequestOrderStatusToUniconta(
 {
     private readonly StatusMappingConfig _config = config.Value;
 
-    // Heartbeat only — the real day/night cadence is enforced by SyncScheduler ("RequestOrderStatus"
-    // cadence in SyncScheduling config). The function is read-heavy (one full JD GetRequestOrders + one
-    // full Uniconta DebtorOrder scan), so a non-due tick returns before any of that work.
-    [Function("SyncRequestOrderStatusToUniconta")]
-    public async Task RunAsync([TimerTrigger("0 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    // Invoked by SyncDispatcher, not by its own timer — see that class. The scheduler gate below
+    // still decides whether this tick does any work, so the configured cadence is unchanged.
+    public async Task RunAsync(CancellationToken cancellationToken)
     {
         if (!scheduler.TryBeginRun("RequestOrderStatus", DateTime.UtcNow)) return;
 

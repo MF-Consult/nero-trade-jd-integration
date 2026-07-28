@@ -87,4 +87,14 @@ builder.Services.AddSingleton<PurchaseOrderMapper>();
 // PDF Generation
 builder.Services.AddSingleton<IDeliveryNotePdfService, DeliveryNotePdfService>();
 
+// Sync jobs. They no longer carry their own [Function]/[TimerTrigger] — SyncDispatcher owns the single
+// timer and calls them — so the runtime does not construct them for us and they must be registered here.
+// Scoped, so one dispatcher invocation shares one IUnicontaRepository/IUnicontaService with all six.
+builder.Services.AddScoped<NeroTrade.JDIntegration.Functions.SyncSalesOrdersToJd>();
+builder.Services.AddScoped<NeroTrade.JDIntegration.Functions.SyncPurchaseOrdersToJd>();
+builder.Services.AddScoped<NeroTrade.JDIntegration.Functions.SyncPostedPurchaseInvoicesToJd>();
+builder.Services.AddScoped<NeroTrade.JDIntegration.Functions.SyncItemsToJd>();
+builder.Services.AddScoped<NeroTrade.JDIntegration.Functions.SyncRequestOrderStatusToUniconta>();
+builder.Services.AddScoped<NeroTrade.JDIntegration.Functions.SyncReceivedQuantityToUniconta>();
+
 builder.Build().Run();

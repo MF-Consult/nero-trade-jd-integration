@@ -32,10 +32,9 @@ public sealed class SyncSalesOrdersToJd(
     // Skip (not queue) when the lock is held: queuing just amplifies the same race.
     private static readonly SemaphoreSlim RunLock = new(1, 1);
 
-    // Heartbeat only — the real day/night cadence is enforced by SyncScheduler ("SalesOrders" cadence
-    // in SyncScheduling config). Non-due ticks return before RunLock and before any Uniconta call.
-    [Function("SyncSalesOrdersToJd")]
-    public async Task RunAsync([TimerTrigger("*/30 * * * * *")] TimerInfo timer, CancellationToken cancellationToken)
+    // Invoked by SyncDispatcher, not by its own timer — see that class. The scheduler gate below
+    // still decides whether this tick does any work, so the configured cadence is unchanged.
+    public async Task RunAsync(CancellationToken cancellationToken)
     {
         if (!scheduler.TryBeginRun("SalesOrders", DateTime.UtcNow)) return;
 

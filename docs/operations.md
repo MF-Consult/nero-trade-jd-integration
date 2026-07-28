@@ -231,8 +231,14 @@ Config keys (App Settings use `SyncScheduling__…`): `TimeZoneId` (default `Rom
   ```
   Telemetry that day showed several concurrent `AppRoleInstance` values and ~2.2× the handshake rate the
   90 s session age alone can explain — consistent with multiple instances each holding their own session.
-- **Effective cadence is quantized to the heartbeat** (30 s → Sales ~60 s, PO ~90 s). Always ≥ the
-  configured value, so always ≤ budget. For exact sub-minute values, lower the heartbeat cron.
+- **Effective cadence is quantized to the heartbeat** (`SyncDispatcher` fires every 30 s, so a 72 s
+  setting lands on 90 s). Always ≥ the configured value, so always ≤ budget.
+- **One timer for the whole app.** `SyncDispatcher` is the only `TimerTrigger`; it calls the six jobs in
+  sequence and each self-gates. Do **not** give a job its own timer back: the scale controller puts each
+  timer listener on its own instance, and each instance holds its own Uniconta session. Six timers meant
+  six sessions, none of which lived long enough to be reused — measured 2026-07-28 as ~56% of the daily
+  call volume, with cost per run following `1 + 2/ceil(sessionAge / interval)` (1.67 calls at 60 s, 2.00 at
+  90 s, 3.00 at 10 min). Merging to one timer shares one session across all jobs.
 
 ---
 

@@ -104,9 +104,14 @@ CI/CD via GitHub Actions (`.github/workflows/master_nero-trade-data-syncer.yml`)
 - Sales-order eligibility: `xTransferToJD` = true, `Group` empty/`Fejlet`, and `UpdatedAt` within the
   last **1 day** (`SalesOrderRecentWindow`). Purchase orders have no time window (all scanned).
 - Nullable reference types are enabled — null-check Uniconta query results carefully
-- All sync functions are `TimerTrigger`-based except `TestGeneratePdf` (HTTP) and `SyncDebtorsToJd` (HTTP)
-- **Sync cadence is config-driven, NOT the `TimerTrigger` cron.** Each sync's `[TimerTrigger(...)]` is
-  only a fast heartbeat; `SyncScheduler` (config: `SyncScheduling`) gates each tick down to a per-job
+- All sync jobs run under the single `SyncDispatcher` timer; `TestGeneratePdf`, `SyncDebtorsToJd`, the `inspect/*` and `remediation/*` endpoints are HTTP
+- **There is exactly one timer in the app: `SyncDispatcher`** (`*/30`). It calls the six sync jobs in
+  sequence; each one self-gates via `SyncScheduler`. The jobs are plain classes registered in `Program.cs`
+  — they have no `[Function]`/`[TimerTrigger]` of their own, and must not get one back: the Functions scale
+  controller puts every timer listener on its **own instance**, so six timers meant six instances, six
+  Uniconta sessions and a handshake bill of ~56% of the daily call budget (measured 2026-07-28).
+- **Sync cadence is config-driven, NOT the `TimerTrigger` cron.** The dispatcher's cron is only a fast
+  heartbeat; `SyncScheduler` (config: `SyncScheduling`) gates each tick down to a per-job
   day/night interval and returns before any Uniconta call on non-due ticks. This keeps Uniconta volume
   under budget (~<4.000 calls/day) and lets ops retune without a redeploy. `MaxSessionAge` in
   `UnicontaConnectionManager` is likewise day/night-aware (short by day for UI-edit freshness, relaxed
