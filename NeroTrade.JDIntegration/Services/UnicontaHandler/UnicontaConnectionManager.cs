@@ -154,6 +154,9 @@ public sealed class UnicontaConnectionManager : IDisposable
     /// <param name="timeout">Overrides the configured <c>UnicontaConfig.TimeoutSeconds</c>. Tests only.</param>
     public async Task<T> RunWithTimeoutAsync<T>(Task<T> sdkCall, string operation, TimeSpan? timeout = null)
     {
+        // Single chokepoint for every Uniconta call, so this is where the daily budget gets measured.
+        UnicontaCallCounter.Increment();
+
         timeout ??= TimeSpan.FromSeconds(Math.Max(5, _config.TimeoutSeconds));
         if (await Task.WhenAny(sdkCall, Task.Delay(timeout.Value)) == sdkCall)
             return await sdkCall;

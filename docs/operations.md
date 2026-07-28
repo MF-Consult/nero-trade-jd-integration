@@ -263,9 +263,36 @@ catch (Exception ex) { run.MarkFailed(ex); /* existing emit + throw */ }
 The wrapper writes:
 
 1. A `started` info row at entry (payload: `{ run_name, started_at }`).
-2. A paired `completed` row in `DisposeAsync` (in a `try/finally`, so an exception still produces a completion row at `level=error` with `duration_ms` set). Payload: `{ run_name, started_at, finished_at, duration_ms, counts: <whatever caller attached via AttachCompletionPayload> }`.
+2. A paired `completed` row in `DisposeAsync` (in a `try/finally`, so an exception still produces a completion row — at the level the classifier assigns, `error` for actionable failures and `warning` for ones nobody can act on — with `duration_ms` set). Payload: `{ run_name, started_at, finished_at, duration_ms, exit_reason, uniconta_calls, counts: <whatever caller attached via AttachCompletionPayload> }`.
 
 The existing per-function completion `IntegrationLogEntry` rows are kept unchanged. The two rows aggregate fine in `integration_runs`.
+
+### 5.1.1 Uniconta call budget
+
+`payload.uniconta_calls` counts the Uniconta API calls that invocation made — reads, writes **and** the
+`Login`/`OpenCompany` handshakes, which are the single largest line item (they dominated the measured
+volume in July 2026). Every call funnels through `UnicontaConnectionManager.RunWithTimeoutAsync`, which is
+where the counting happens; the scope is opened per invocation by `IntegrationRun`, because the connection
+manager is a singleton shared by concurrently running syncs.
+
+Before tuning any cadence in `SyncScheduling`, measure — do not estimate:
+
+```sql
+-- Uniconta calls per day, and per job
+select date_trunc('day', created_at at time zone 'Europe/Copenhagen') as dag,
+       payload->>'run_name'                                            as job,
+       sum((payload->>'uniconta_calls')::int)                          as kald,
+       count(*)                                                        as koersler
+from integration_logs
+where payload ? 'uniconta_calls'
+group by 1, 2
+order by 1 desc, kald desc;
+```
+
+**Note on instances:** the cadence gate (`SyncScheduler`) and the Uniconta session are both per worker
+instance. Telemetry on 2026-07-28 showed the app running across **several** `AppRoleInstance` values, which
+multiplies the handshake cost and means the configured cadence is not a global guarantee. Confirm the
+instance count before reading the budget as final.
 
 ### 5.2 Views
 

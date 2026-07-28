@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using NeroTrade.JDIntegration.Services.UnicontaHandler;
 
 namespace NeroTrade.JDIntegration.Services.Logging;
 
@@ -33,6 +34,11 @@ public sealed class IntegrationRun : IAsyncDisposable
         _stopwatch = Stopwatch.StartNew();
 
         Scope = new IntegrationLogScope { RunName = runName };
+
+        // Opens the per-invocation Uniconta call counter. Set here, before the function awaits any work,
+        // so the AsyncLocal flows through the whole invocation; the total lands on the completion row as
+        // payload.uniconta_calls. See UnicontaCallCounter.
+        UnicontaCallCounter.BeginScope();
 
         // No started row is emitted — the completion row in DisposeAsync already carries
         // started_at + duration_ms in payload, so an explicit start event is duplicate noise.
@@ -92,6 +98,9 @@ public sealed class IntegrationRun : IAsyncDisposable
             finished_at = finishedAt,
             duration_ms = duration,
             exit_reason = exitReason,
+            // Uniconta calls this invocation made (reads, writes, and Login/OpenCompany handshakes).
+            // Top-level rather than inside counts so the daily budget is one SQL sum over the run rows.
+            uniconta_calls = UnicontaCallCounter.Count,
             counts = _completionPayload
         };
 
