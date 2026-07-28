@@ -31,8 +31,17 @@ public sealed class SyncSchedulingOptions
     /// <summary>Local hour (exclusive) at which the day cadence ends and the night cadence begins.</summary>
     public int DayEndHour { get; init; } = 22;
 
-    /// <summary>Max Uniconta session age during the day window. Short on purpose — see UnicontaConnectionManager.</summary>
-    public int SessionMaxAgeDaySeconds { get; init; } = 90;
+    /// <summary>
+    /// Max Uniconta session age during the day window. Short on purpose — see UnicontaConnectionManager.
+    ///
+    /// Raised 90 → 150 s on 2026-07-28 to buy back call budget: each recycle costs a Login + an
+    /// OpenCompany, and measurement showed those handshakes were ~56% of all Uniconta calls (~2.900 of
+    /// ~5.200/day). The cost is freshness: a Uniconta UI edit can now go unseen for up to 150 s instead of
+    /// 90 s, plus the job's own cadence. Do not raise it much further without evidence — the short age is
+    /// the mitigation for the per-session server-side staleness seen in "ordre 2161" (2026-05-27), which is
+    /// a different problem from the SetCache one fixed on 2026-07-27 and is NOT addressed by filtered reads.
+    /// </summary>
+    public int SessionMaxAgeDaySeconds { get; init; } = 150;
 
     /// <summary>Max Uniconta session age at night. Long is safe: no UI edits at night, so no staleness risk.</summary>
     public int SessionMaxAgeNightSeconds { get; init; } = 900;
@@ -45,7 +54,11 @@ public sealed class SyncSchedulingOptions
     {
         ["SalesOrders"] = new JobCadence { DaySeconds = 50, NightSeconds = 300 },
         ["PurchaseOrders"] = new JobCadence { DaySeconds = 72, NightSeconds = 1800 },
-        ["PostedPurchaseInvoices"] = new JobCadence { DaySeconds = 300, NightSeconds = 1800 },
+        // Same day cadence as PurchaseOrders on purpose: a booked-before-flagged purchase order is caught
+        // only by this safety-net, so it should not wait five times longer than the normal path. With the
+        // 30 s heartbeat both land on an effective ~90 s. Costs ~434 extra Uniconta calls/day (one read per
+        // run); the session-age change above pays for it several times over.
+        ["PostedPurchaseInvoices"] = new JobCadence { DaySeconds = 72, NightSeconds = 1800 },
         ["RequestOrderStatus"] = new JobCadence { DaySeconds = 300, NightSeconds = 1800 },
         ["Items"] = new JobCadence { DaySeconds = 180, NightSeconds = 3600 },
         ["ReceivedQuantity"] = new JobCadence { DaySeconds = 900, NightSeconds = 3600 },

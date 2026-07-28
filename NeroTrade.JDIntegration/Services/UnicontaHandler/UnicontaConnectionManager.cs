@@ -33,7 +33,9 @@ public sealed class UnicontaConnectionManager : IDisposable
     //     until the next reconnect. SDK decompile confirmed our code path always hits the server,
     //     so the staleness is per-session server-side. A short age caps customer-visible delay.
     // The max age is now day/night-aware via SyncScheduler (config: SyncScheduling.SessionMaxAge*):
-    //  - Day (~90 s): the short cap above matters because users are editing in the Uniconta UI.
+    //  - Day (~150 s): the short cap above matters because users are editing in the Uniconta UI. Raised
+    //    from 90 s on 2026-07-28 — each recycle costs two Uniconta calls (Login + OpenCompany), and those
+    //    handshakes measured ~56% of the whole daily call budget.
     //  - Night (~15 min): no UI edits happen, so the staleness concern does not apply and we relax
     //    the age to cut reconnects (each reconnect = one Login + one OpenCompany round-trip).
     // Cost during the day: ~40 reconnects/hour per worker instance. Login+OpenCompany is ~500-1000 ms,

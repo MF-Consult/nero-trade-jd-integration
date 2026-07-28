@@ -201,11 +201,18 @@ Defaults (see `Models/Settings/SyncSchedulingOptions.cs`) — day window **07–
 |---|---|---|
 | `SalesOrders` | 50 s | 5 min |
 | `PurchaseOrders` | 72 s | 30 min |
-| `PostedPurchaseInvoices` | 5 min | 30 min |
+| `PostedPurchaseInvoices` | 72 s | 30 min |
 | `RequestOrderStatus` | 5 min | 30 min |
 | `Items` | 3 min | 60 min |
 | `ReceivedQuantity` | 15 min | 60 min |
-| Uniconta session max age | 90 s | 15 min |
+| Uniconta session max age | 150 s | 15 min |
+
+Changed 2026-07-28: `PostedPurchaseInvoices` 5 min → 72 s (its heartbeat also went 60 s → 30 s so the
+cadence can be expressed), matching the open-order path — a purchase order booked before it was flagged is
+caught *only* by that safety-net. Session max age 90 s → 150 s to pay for it: each recycle is a Login + an
+OpenCompany, and those handshakes measured **~56% of the entire daily call volume** (~2.900 of ~5.200).
+Net effect ≈ −570 calls/day. The cost is freshness — a Uniconta UI edit can go unseen for 150 s instead of
+90 s.
 
 Config keys (App Settings use `SyncScheduling__…`): `TimeZoneId` (default `Romance Standard Time`),
 `DayStartHour`, `DayEndHour`, `SessionMaxAgeDaySeconds`, `SessionMaxAgeNightSeconds`, and
@@ -214,8 +221,16 @@ Config keys (App Settings use `SyncScheduling__…`): `TimeZoneId` (default `Rom
 **Caveats:**
 - **`WEBSITE_TIME_ZONE` is NOT needed** — `SyncScheduler` converts UTC→local itself via `TimeZoneId`,
   and the heartbeat crons are timezone-agnostic.
-- **Pin to a single instance** (`WEBSITE_MAX_INSTANCES=1` / functionAppScaleLimit=1). Last-run state is
-  in-memory per worker; a scale-out would give each instance its own schedule and multiply the calls.
+- **Pin to a single instance.** Last-run state and the Uniconta session are in-memory per instance, so a
+  scale-out gives each instance its own schedule *and* its own session — multiplying both the cadence and
+  the handshake cost. **This app is on Flex Consumption (FC1)**, where `WEBSITE_MAX_INSTANCES` and
+  `functionAppScaleLimit` do **not** apply; the knob is
+  `functionAppConfig.scaleAndConcurrency.maximumInstanceCount`, which as of 2026-07-28 is **100**:
+  ```bash
+  az functionapp scale config set -g Nero-Trade -n nero-trade-data-syncer --maximum-instance-count 1
+  ```
+  Telemetry that day showed several concurrent `AppRoleInstance` values and ~2.2× the handshake rate the
+  90 s session age alone can explain — consistent with multiple instances each holding their own session.
 - **Effective cadence is quantized to the heartbeat** (30 s → Sales ~60 s, PO ~90 s). Always ≥ the
   configured value, so always ≤ budget. For exact sub-minute values, lower the heartbeat cron.
 
