@@ -59,9 +59,13 @@ public sealed class SyncSchedulingOptions
         // 30 s heartbeat both land on an effective ~90 s. Costs ~434 extra Uniconta calls/day (one read per
         // run); the session-age change above pays for it several times over.
         ["PostedPurchaseInvoices"] = new JobCadence { DaySeconds = 72, NightSeconds = 1800 },
-        ["RequestOrderStatus"] = new JobCadence { DaySeconds = 300, NightSeconds = 1800 },
-        ["Items"] = new JobCadence { DaySeconds = 180, NightSeconds = 3600 },
-        ["ReceivedQuantity"] = new JobCadence { DaySeconds = 900, NightSeconds = 3600 },
+        // Slowed on 2026-07-28 to fund the PostedPurchaseInvoices cadence within the daily call budget.
+        // These three are the ones where latency genuinely does not matter: a JD status reaching Uniconta
+        // in 10 min instead of 5, an item-master edit in 10 min instead of 3, a received quantity in 30 min
+        // instead of 15. Measured cost of a run is ~2 Uniconta calls, so this is worth ~690 calls/day.
+        ["RequestOrderStatus"] = new JobCadence { DaySeconds = 600, NightSeconds = 1800 },
+        ["Items"] = new JobCadence { DaySeconds = 600, NightSeconds = 3600 },
+        ["ReceivedQuantity"] = new JobCadence { DaySeconds = 1800, NightSeconds = 3600 },
     };
 
     public sealed class JobCadence

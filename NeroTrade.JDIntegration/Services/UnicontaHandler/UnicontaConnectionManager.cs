@@ -16,6 +16,10 @@ public sealed class UnicontaConnectionManager : IDisposable
     private readonly UnicontaConfig _config;
     private readonly SyncScheduler _scheduler;
     private readonly SemaphoreSlim _connectGate = new(1, 1);
+
+    // One per .NET process. Two managers reporting different ids on the same host means the platform is
+    // running several worker processes, each with its own Uniconta session — see ConnectAsync.
+    private static readonly Guid ProcessInstanceId = Guid.NewGuid();
     private UnicontaConnection? _connection;
     private Session? _session;
     private Company? _company;
@@ -241,7 +245,16 @@ public sealed class UnicontaConnectionManager : IDisposable
 
         try
         {
-            _logger.LogInformation("Establishing Uniconta connection...");
+            // Host + process identity on every handshake. Login/OpenCompany is the single biggest line
+            // item in the Uniconta call budget (~54% of runs paid one on 2026-07-28), and the rate is
+            // several times what one session with a 150 s max age can produce. Telemetry could not settle
+            // whether that is many instances or many worker processes per instance — AppRoleInstance showed
+            // three concurrent ids sharing one ordinal, and capping maximumInstanceCount to 1 plus a
+            // restart changed nothing. Same host + different process id ⇒ worker processes; different
+            // hosts ⇒ instances. Each process holds its own singleton manager, hence its own session.
+            _logger.LogInformation(
+                "Establishing Uniconta connection... (host {HostName}, process {ProcessId}, managerId {ManagerId})",
+                Environment.MachineName, Environment.ProcessId, ProcessInstanceId);
             _connection = new UnicontaConnection(APITarget.Live);
             _session = new Session(_connection);
 

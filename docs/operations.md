@@ -202,9 +202,9 @@ Defaults (see `Models/Settings/SyncSchedulingOptions.cs`) — day window **07–
 | `SalesOrders` | 50 s | 5 min |
 | `PurchaseOrders` | 72 s | 30 min |
 | `PostedPurchaseInvoices` | 72 s | 30 min |
-| `RequestOrderStatus` | 5 min | 30 min |
-| `Items` | 3 min | 60 min |
-| `ReceivedQuantity` | 15 min | 60 min |
+| `RequestOrderStatus` | 10 min | 30 min |
+| `Items` | 10 min | 60 min |
+| `ReceivedQuantity` | 30 min | 60 min |
 | Uniconta session max age | 150 s | 15 min |
 
 Changed 2026-07-28: `PostedPurchaseInvoices` 5 min → 72 s (its heartbeat also went 60 s → 30 s so the
