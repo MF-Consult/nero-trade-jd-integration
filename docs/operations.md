@@ -202,9 +202,9 @@ Defaults (see `Models/Settings/SyncSchedulingOptions.cs`) — day window **07–
 | `SalesOrders` | 60 s | 5 min |
 | `PurchaseOrders` | 72 s | 30 min |
 | `PostedPurchaseInvoices` | 72 s | 30 min |
-| `RequestOrderStatus` | 10 min | 30 min |
-| `Items` | 10 min | 60 min |
-| `ReceivedQuantity` | 30 min | 60 min |
+| `RequestOrderStatus` | ~10 min | 30 min |
+| `Items` | ~10 min | 60 min |
+| `ReceivedQuantity` | ~30 min | 60 min |
 | Uniconta session max age | 150 s | 15 min |
 
 Changed 2026-07-28: `SalesOrders` briefly went 60 → 90 s while the call budget was over its ceiling and
@@ -235,6 +235,10 @@ Config keys (App Settings use `SyncScheduling__…`): `TimeZoneId` (default `Rom
   90 s session age alone can explain — consistent with multiple instances each holding their own session.
 - **Effective cadence is quantized to the heartbeat** (`SyncDispatcher` fires every 30 s, so a 72 s
   setting lands on 90 s). Always ≥ the configured value, so always ≤ budget.
+- **Configure just *below* the intended multiple of 30 s.** `TryBeginRun` stamps the last run a few
+  hundred ms after the tick, so a job set to exactly 60 s measures 59.9 s at the 60 s tick, fails the
+  `>=` test and waits for the next one. Setting `SalesOrders` to 60 was measured (2026-07-29) as an actual
+  60/90 alternation averaging 75 s. That is why the values are 50 and 72, not 60 and 90.
 - **One timer for the whole app.** `SyncDispatcher` is the only `TimerTrigger`; it calls the six jobs in
   sequence and each self-gates. Do **not** give a job its own timer back: the scale controller puts each
   timer listener on its own instance, and each instance holds its own Uniconta session. Six timers meant
@@ -371,6 +375,11 @@ Convention: `SUBSYSTEM_REASON`, SCREAMING_SNAKE. Extend freely — new codes don
 | `UNKNOWN`                     | Fallback. These go to the Hermes "novel error" reasoning cascade.                       |
 
 ---
+
+> **`SyncDebtorsToJd` is intentionally not registered.** It carries a `[Function]` attribute but does not
+> appear in `functions.metadata` and never has, so the `sync-debtors-to-jd` route does not exist. This is
+> deliberate — debtors are not synced on a schedule. Do not "fix" it by making it register; if the endpoint
+> is ever wanted, that is a decision to take explicitly.
 
 ## 7. `/remediation/*` remediation endpoints
 

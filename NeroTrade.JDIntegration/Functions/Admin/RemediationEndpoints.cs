@@ -64,7 +64,7 @@ public sealed class RemediationEndpoints(
         CancellationToken cancellationToken)
         => HandleAsync(req, cancellationToken, async logScope =>
         {
-            var success = await uniconta.SetPurchaseOrderHeaderFieldsAsync(poNumber, new Dictionary<string, object>
+            var success = UnicontaWriteResult.Updated == await uniconta.SetPurchaseOrderHeaderFieldsAsync(poNumber, new Dictionary<string, object>
             {
                 [UnicontaUserFields.PurchaseOrderJdStatus] = PurchaseOrderJdStatusValues.ManualHandling,
                 [UnicontaUserFields.PurchaseOrderTransferFlag] = true,

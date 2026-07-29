@@ -66,7 +66,30 @@ public sealed class SyncReceivedQuantityToUniconta(
 
                 // Mark the Purchase Order as fully handled in JD.
                 // We do this regardless of line items, as long as we have identified the PO.
-                await uniconta.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, UnicontaUserFields.PurchaseOrderJdStatus, PurchaseOrderJdStatusValues.Completed, token);
+                var statusWrite = await uniconta.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, UnicontaUserFields.PurchaseOrderJdStatus, PurchaseOrderJdStatusValues.Completed, token);
+
+                if (statusWrite == UnicontaWriteResult.OrderNotFound)
+                {
+                    // The order is booked: it has left the open-order table, and its goods receipt is
+                    // already recorded in Uniconta by the booking itself. There is nothing to write a
+                    // received quantity to — posted invoice lines are immutable — so we set the status on
+                    // the invoice header (where the booked order's user fields live) and move on.
+                    //
+                    // Before this, the sync kept trying and logged one UNICONTA_CRUD_FAILED per SKU per
+                    // tick for the 24 hours the JD shipment stayed in the lookback window — 85 rows for
+                    // PO 34, 49 for PO 39, ~85 for PO 10 — each one waking the Hermes agent. Those were
+                    // never failures; they were the normal state of a booked order.
+                    await uniconta.SetPurchaseInvoiceHeaderFieldsAsync(purchaseNumber, new Dictionary<string, object>
+                    {
+                        [UnicontaUserFields.PurchaseOrderJdStatus] = PurchaseOrderJdStatusValues.Completed,
+                    }, token);
+
+                    logger.LogInformation(
+                        "PO {Po} is booked; received quantity is already in Uniconta's books. Set JD status on the posted invoice instead.",
+                        purchaseNumber);
+                    skippedCount++;
+                    continue;
+                }
 
                 // Fetch full details to get registered items
                 var shipment = await jd.GetIncomingShipmentByIdAsync(summary.id.Value, token);
@@ -103,9 +126,17 @@ public sealed class SyncReceivedQuantityToUniconta(
                 foreach (var (sku, receivedQty) in quantitiesBySku)
                 {
                     // Update Uniconta
-                    var success = await uniconta.UpdatePurchaseOrderLineQuantityAsync(purchaseNumber, sku, receivedQty, token);
+                    var lineWrite = await uniconta.UpdatePurchaseOrderLineQuantityAsync(purchaseNumber, sku, receivedQty, token);
 
-                    if (!success)
+                    if (lineWrite == UnicontaWriteResult.OrderNotFound)
+                    {
+                        // Booked between the status write above and now. Same reasoning as there: nothing
+                        // to write, and not a failure. Stop on this shipment rather than repeat it per SKU.
+                        logger.LogInformation("PO {Po} was booked mid-run; leaving the remaining lines to the books.", purchaseNumber);
+                        break;
+                    }
+
+                    if (lineWrite == UnicontaWriteResult.Failed)
                     {
                         logger.LogError("Failed to sync line {Sku} for PO {Po}", sku, purchaseNumber);
                         errorCount++;
@@ -117,7 +148,7 @@ public sealed class SyncReceivedQuantityToUniconta(
                             CorrelationId = logScope.CorrelationId,
                             ErrorCode = "UNICONTA_CRUD_FAILED",
                             Retryable = true,
-                            SuggestedAction = "Auto-recovers on next tick (15 min); if persistent, call /admin/requeue-shipment for the source shipment."
+                            SuggestedAction = "The order exists but the write was rejected, or JD registered a SKU that is not on the order. Check the PO line for that SKU in Uniconta."
                         }, token);
                     }
                     else

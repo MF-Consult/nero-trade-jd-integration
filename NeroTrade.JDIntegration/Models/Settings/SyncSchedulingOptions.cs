@@ -52,10 +52,13 @@ public sealed class SyncSchedulingOptions
     /// </summary>
     public Dictionary<string, JobCadence> Jobs { get; init; } = new()
     {
-        // Back to 60 s on 2026-07-28. It was briefly slowed to 90 s as a stopgap while the call budget was
-        // over its ceiling; SyncDispatcher removed the cause (six timers meant six Uniconta sessions), so
-        // the budget now has ~40% headroom and the fastest sync no longer has to pay for it.
-        ["SalesOrders"] = new JobCadence { DaySeconds = 60, NightSeconds = 300 },
+        // 50, not 60, for a 60 s effective cadence — and that difference is not cosmetic. The dispatcher
+        // ticks every 30 s and TryBeginRun stamps the last run a few hundred ms after the tick, so a job
+        // configured at exactly 60 s measures 59.9 s at the 60 s tick, misses the >= test, and waits for
+        // the next one. Setting 60 was measured on 2026-07-29 as an actual cadence of 60/90 alternating,
+        // averaging 75 s. Keep every interval just below its intended multiple of 30 (hence 72 for the
+        // purchase jobs, giving a reliable 90 s).
+        ["SalesOrders"] = new JobCadence { DaySeconds = 50, NightSeconds = 300 },
         ["PurchaseOrders"] = new JobCadence { DaySeconds = 72, NightSeconds = 1800 },
         // Same day cadence as PurchaseOrders on purpose: a booked-before-flagged purchase order is caught
         // only by this safety-net, so it should not wait five times longer than the normal path. With the
@@ -66,9 +69,10 @@ public sealed class SyncSchedulingOptions
         // These three are the ones where latency genuinely does not matter: a JD status reaching Uniconta
         // in 10 min instead of 5, an item-master edit in 10 min instead of 3, a received quantity in 30 min
         // instead of 15. Measured cost of a run is ~2 Uniconta calls, so this is worth ~690 calls/day.
-        ["RequestOrderStatus"] = new JobCadence { DaySeconds = 600, NightSeconds = 1800 },
-        ["Items"] = new JobCadence { DaySeconds = 600, NightSeconds = 3600 },
-        ["ReceivedQuantity"] = new JobCadence { DaySeconds = 1800, NightSeconds = 3600 },
+        // The 590/1790 values follow the same just-below-a-30s-tick rule as SalesOrders above.
+        ["RequestOrderStatus"] = new JobCadence { DaySeconds = 590, NightSeconds = 1800 },
+        ["Items"] = new JobCadence { DaySeconds = 590, NightSeconds = 3600 },
+        ["ReceivedQuantity"] = new JobCadence { DaySeconds = 1790, NightSeconds = 3600 },
     };
 
     public sealed class JobCadence

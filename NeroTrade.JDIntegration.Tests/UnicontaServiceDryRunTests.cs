@@ -29,9 +29,9 @@ public class UnicontaServiceDryRunTests
 
         Assert.True(await service.UpdateSalesOrderGroupAsync(2208, "", default));
         Assert.True(await service.SetSalesOrderStatusAsync(2208, "Oprettet", new Dictionary<string, object>(), default));
-        Assert.True(await service.UpdatePurchaseOrderLineQuantityAsync(100, "SKU1", 3, default));
-        Assert.True(await service.SetPurchaseOrderHeaderFieldAsync(100, "xField", "v", default));
-        Assert.True(await service.SetPurchaseOrderHeaderFieldsAsync(100, new Dictionary<string, object>(), default));
+        Assert.Equal(UnicontaWriteResult.Updated, await service.UpdatePurchaseOrderLineQuantityAsync(100, "SKU1", 3, default));
+        Assert.Equal(UnicontaWriteResult.Updated, await service.SetPurchaseOrderHeaderFieldAsync(100, "xField", "v", default));
+        Assert.Equal(UnicontaWriteResult.Updated, await service.SetPurchaseOrderHeaderFieldsAsync(100, new Dictionary<string, object>(), default));
         Assert.True(await service.SetPurchaseInvoiceHeaderFieldsAsync(32, new Dictionary<string, object>(), default));
 
         Assert.Equal(0, spy.WriteCallCount);
@@ -67,14 +67,14 @@ public class UnicontaServiceDryRunTests
         public Task<bool> SetSalesOrderStatusAsync(int orderNumber, string group, IReadOnlyDictionary<string, object> userFields, CancellationToken cancellationToken)
         { WriteCallCount++; return Task.FromResult(true); }
 
-        public Task<bool> UpdatePurchaseOrderLineQuantityAsync(int purchaseNumber, string sku, double qtyNow, CancellationToken cancellationToken)
-        { WriteCallCount++; return Task.FromResult(true); }
+        public Task<UnicontaWriteResult> UpdatePurchaseOrderLineQuantityAsync(int purchaseNumber, string sku, double qtyNow, CancellationToken cancellationToken)
+        { WriteCallCount++; return Task.FromResult(UnicontaWriteResult.Updated); }
 
-        public Task<bool> SetPurchaseOrderHeaderFieldAsync(int purchaseNumber, string fieldName, object value, CancellationToken cancellationToken)
-        { WriteCallCount++; return Task.FromResult(true); }
+        public Task<UnicontaWriteResult> SetPurchaseOrderHeaderFieldAsync(int purchaseNumber, string fieldName, object value, CancellationToken cancellationToken)
+        { WriteCallCount++; return Task.FromResult(UnicontaWriteResult.Updated); }
 
-        public Task<bool> SetPurchaseOrderHeaderFieldsAsync(int purchaseNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
-        { WriteCallCount++; return Task.FromResult(true); }
+        public Task<UnicontaWriteResult> SetPurchaseOrderHeaderFieldsAsync(int purchaseNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
+        { WriteCallCount++; return Task.FromResult(UnicontaWriteResult.Updated); }
 
         public Task<bool> SetPurchaseInvoiceHeaderFieldsAsync(int orderNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
         { WriteCallCount++; return Task.FromResult(true); }

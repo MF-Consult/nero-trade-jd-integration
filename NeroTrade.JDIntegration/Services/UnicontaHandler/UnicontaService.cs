@@ -19,6 +19,13 @@ public sealed class UnicontaService(IUnicontaRepository repo, JdSettings jdSetti
         logger.LogInformation("[DRY-RUN] Skipping Uniconta write {Operation} — nothing written to Uniconta.", operation);
         return Task.FromResult(true);
     }
+
+    /// <summary>Same, for the purchase-order writes that report a <see cref="UnicontaWriteResult"/>.</summary>
+    private Task<UnicontaWriteResult> DryRunSkipPurchaseWrite(string operation)
+    {
+        logger.LogInformation("[DRY-RUN] Skipping Uniconta write {Operation} — nothing written to Uniconta.", operation);
+        return Task.FromResult(UnicontaWriteResult.Updated);
+    }
     public async IAsyncEnumerable<LocalDebtor> ReadDebtorsBatchedAsync(int batchSize, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var buffer = new List<LocalDebtor>(batchSize);
@@ -107,21 +114,21 @@ public sealed class UnicontaService(IUnicontaRepository repo, JdSettings jdSetti
         return repo.SetSalesOrderStatusAsync(orderNumber, group, userFields, cancellationToken);
     }
 
-    public Task<bool> UpdatePurchaseOrderLineQuantityAsync(int purchaseNumber, string sku, double qtyNow, CancellationToken cancellationToken)
+    public Task<UnicontaWriteResult> UpdatePurchaseOrderLineQuantityAsync(int purchaseNumber, string sku, double qtyNow, CancellationToken cancellationToken)
     {
-        if (jdSettings.DryRun) return DryRunSkipUnicontaWrite($"UpdatePurchaseOrderLineQuantity(po={purchaseNumber}, sku={sku}, qty={qtyNow})");
+        if (jdSettings.DryRun) return DryRunSkipPurchaseWrite($"UpdatePurchaseOrderLineQuantity(po={purchaseNumber}, sku={sku}, qty={qtyNow})");
         return repo.UpdatePurchaseOrderLineQuantityAsync(purchaseNumber, sku, qtyNow, cancellationToken);
     }
 
-    public Task<bool> SetPurchaseOrderHeaderFieldAsync(int purchaseNumber, string fieldName, object value, CancellationToken cancellationToken)
+    public Task<UnicontaWriteResult> SetPurchaseOrderHeaderFieldAsync(int purchaseNumber, string fieldName, object value, CancellationToken cancellationToken)
     {
-        if (jdSettings.DryRun) return DryRunSkipUnicontaWrite($"SetPurchaseOrderHeaderField(po={purchaseNumber}, field={fieldName})");
+        if (jdSettings.DryRun) return DryRunSkipPurchaseWrite($"SetPurchaseOrderHeaderField(po={purchaseNumber}, field={fieldName})");
         return repo.SetPurchaseOrderHeaderFieldAsync(purchaseNumber, fieldName, value, cancellationToken);
     }
 
-    public Task<bool> SetPurchaseOrderHeaderFieldsAsync(int purchaseNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
+    public Task<UnicontaWriteResult> SetPurchaseOrderHeaderFieldsAsync(int purchaseNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
     {
-        if (jdSettings.DryRun) return DryRunSkipUnicontaWrite($"SetPurchaseOrderHeaderFields(po={purchaseNumber}, fields=[{string.Join(",", fields.Keys)}])");
+        if (jdSettings.DryRun) return DryRunSkipPurchaseWrite($"SetPurchaseOrderHeaderFields(po={purchaseNumber}, fields=[{string.Join(",", fields.Keys)}])");
         return repo.SetPurchaseOrderHeaderFieldsAsync(purchaseNumber, fields, cancellationToken);
     }
 

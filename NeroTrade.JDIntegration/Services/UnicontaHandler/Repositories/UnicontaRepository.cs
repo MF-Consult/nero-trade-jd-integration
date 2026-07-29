@@ -464,7 +464,7 @@ public class UnicontaRepository(
             return true;
         });
 
-    public Task<bool> UpdatePurchaseOrderLineQuantityAsync(int purchaseNumber, string sku, double qtyNow, CancellationToken cancellationToken)
+    public Task<UnicontaWriteResult> UpdatePurchaseOrderLineQuantityAsync(int purchaseNumber, string sku, double qtyNow, CancellationToken cancellationToken)
         => connectionManager.ExecuteWithRetryAsync(async () =>
         {
             var queryApi = await connectionManager.CreateQueryApiAsync();
@@ -477,8 +477,10 @@ public class UnicontaRepository(
 
             if (order == null)
             {
-                _logger.LogWarning("Could not find purchase order {OrderNumber} in Uniconta for quantity update", purchaseNumber);
-                return false;
+                // Expected for a booked order — it is no longer in the open-order table. Not a failure;
+                // the caller decides what it means. See UnicontaWriteResult.
+                _logger.LogInformation("No open purchase order {OrderNumber} for quantity update (booked?)", purchaseNumber);
+                return UnicontaWriteResult.OrderNotFound;
             }
 
             // 2. Find the line
@@ -488,15 +490,16 @@ public class UnicontaRepository(
 
             if (line == null)
             {
+                // The order exists but JD registered a SKU that is not on it — a real data mismatch.
                 _logger.LogWarning("Could not find line with SKU {Sku} in purchase order {OrderNumber}", sku, purchaseNumber);
-                return false;
+                return UnicontaWriteResult.Failed;
             }
 
             // 3. Update the quantity
             // If the quantity is already correct, no need to update
             if (Math.Abs(line._Qty - qtyNow) < 0.001)
             {
-                return true;
+                return UnicontaWriteResult.Updated;
             }
 
             line._QtyNow = qtyNow;
@@ -505,16 +508,16 @@ public class UnicontaRepository(
             if (result != ErrorCodes.Succes)
             {
                 _logger.LogError("Failed to update quantity for line {Sku} in purchase order {OrderNumber}. Uniconta Error: {Error}", sku, purchaseNumber, result);
-                return false;
+                return UnicontaWriteResult.Failed;
             }
 
-            return true;
+            return UnicontaWriteResult.Updated;
         });
 
-    public Task<bool> SetPurchaseOrderHeaderFieldAsync(int purchaseNumber, string fieldName, object value, CancellationToken cancellationToken)
+    public Task<UnicontaWriteResult> SetPurchaseOrderHeaderFieldAsync(int purchaseNumber, string fieldName, object value, CancellationToken cancellationToken)
         => SetPurchaseOrderHeaderFieldsAsync(purchaseNumber, new Dictionary<string, object> { [fieldName] = value }, cancellationToken);
 
-    public Task<bool> SetPurchaseOrderHeaderFieldsAsync(int purchaseNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
+    public Task<UnicontaWriteResult> SetPurchaseOrderHeaderFieldsAsync(int purchaseNumber, IReadOnlyDictionary<string, object> fields, CancellationToken cancellationToken)
         => connectionManager.ExecuteWithRetryAsync(async () =>
         {
             var queryApi = await connectionManager.CreateQueryApiAsync();
@@ -526,8 +529,10 @@ public class UnicontaRepository(
 
             if (order == null)
             {
-                _logger.LogWarning("Could not find purchase order {OrderNumber} in Uniconta for header update", purchaseNumber);
-                return false;
+                // Expected for a booked order — see UnicontaWriteResult. The caller can fall back to the
+                // posted invoice, which is where a booked order's user fields live.
+                _logger.LogInformation("No open purchase order {OrderNumber} for header update (booked?)", purchaseNumber);
+                return UnicontaWriteResult.OrderNotFound;
             }
 
             foreach (var (name, value) in fields)
@@ -538,10 +543,10 @@ public class UnicontaRepository(
             if (result != ErrorCodes.Succes)
             {
                 _logger.LogError("Failed to update fields [{Fields}] on purchase order {OrderNumber}. Uniconta Error: {Error}", string.Join(", ", fields.Keys), purchaseNumber, result);
-                return false;
+                return UnicontaWriteResult.Failed;
             }
 
-            return true;
+            return UnicontaWriteResult.Updated;
         });
 
     /// <summary>

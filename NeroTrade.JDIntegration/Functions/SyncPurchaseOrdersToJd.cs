@@ -90,7 +90,7 @@ public sealed class SyncPurchaseOrdersToJd(
         foreach (var item in result.CreatedItems)
         {
             if (!item.SourcePurchaseNumber.HasValue) continue;
-            var ok = await uniconta.SetPurchaseOrderHeaderFieldsAsync(item.SourcePurchaseNumber.Value, new Dictionary<string, object>
+            var ok = UnicontaWriteResult.Updated == await uniconta.SetPurchaseOrderHeaderFieldsAsync(item.SourcePurchaseNumber.Value, new Dictionary<string, object>
             {
                 [UnicontaUserFields.PurchaseOrderJdStatus] = PurchaseOrderJdStatusValues.Created,
                 [UnicontaUserFields.PurchaseOrderTransferFlag] = false,
@@ -132,7 +132,7 @@ public sealed class SyncPurchaseOrdersToJd(
         foreach (var failure in result.Failures)
         {
             if (!failure.Item.SourcePurchaseNumber.HasValue) continue;
-            var ok = await uniconta.SetPurchaseOrderHeaderFieldsAsync(failure.Item.SourcePurchaseNumber.Value, new Dictionary<string, object>
+            var ok = UnicontaWriteResult.Updated == await uniconta.SetPurchaseOrderHeaderFieldsAsync(failure.Item.SourcePurchaseNumber.Value, new Dictionary<string, object>
             {
                 [UnicontaUserFields.PurchaseOrderJdStatus] = PurchaseOrderJdStatusValues.ManualHandling,
                 [UnicontaUserFields.PurchaseOrderTransferFlag] = false,
