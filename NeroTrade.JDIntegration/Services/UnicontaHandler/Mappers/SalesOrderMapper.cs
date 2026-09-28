@@ -83,8 +83,14 @@ public static class CountryHelper
             return (countryName.Trim().ToUpper(), reverseLookup.Value.Name);
         }
 
-        // Default fallback
-        return (countryName.Trim().ToUpper(), countryName.Trim());
+        // Not in the table. JD only accepts a two-letter ISO code, so pass one through as-is (the repository
+        // already converts Uniconta's CountryCode enum to ISO — see UnicontaCountry) and leave the name for
+        // the caller to fill. Anything else is a name we cannot translate: never send it as the code — that
+        // is how "TÜRKIYE" reached JD's producedInCountryCode and was rejected (2026-09-28).
+        var trimmed = countryName.Trim();
+        return trimmed.Length == 2 && trimmed.All(char.IsAsciiLetter)
+            ? (trimmed.ToUpperInvariant(), null)
+            : (null, trimmed);
     }
 }
 
@@ -213,7 +219,7 @@ public sealed class SalesOrderMapper
                 zip = so.DeliveryZip,
                 city = so.DeliveryCity,
                 countryCode = countryCode ?? "DK",
-                country = countryName
+                country = countryName ?? countryCode
             },
             contactPerson = new JdRequestOrderContactPerson
             {

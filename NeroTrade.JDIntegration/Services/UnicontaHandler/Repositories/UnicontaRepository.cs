@@ -43,7 +43,7 @@ public class UnicontaRepository(
                 ZipCode = d.ZipCode,
                 City = d.City,
                 Country = d.Country.ToString(),
-                CountryCode = d._Country == 0 ? null : d._Country.ToString()
+                CountryCode = UnicontaCountry.ToIsoCode(d._Country)
             };
         }
     }
@@ -64,7 +64,7 @@ public class UnicontaRepository(
                 CommodityCode = i.TariffNumber,
                 UnitPrice = (decimal?)i.SalesPrice1,
                 UnitWeightInGrams = (int?)(i.NetWeight * 1000),
-                ProducedInCountryCode = i.CountryOfOrigin?.ToString(),
+                ProducedInCountryCode = UnicontaCountry.ToIsoCode(i.CountryOfOrigin),
                 Barcodes = []
             };
         }
@@ -311,7 +311,7 @@ public class UnicontaRepository(
             DeliveryAddress3 = o._DeliveryAddress3 ?? debtor?._Address3,
             DeliveryZip = o._DeliveryZipCode ?? debtor?._ZipCode,
             DeliveryCity = o._DeliveryCity ?? debtor?._City,
-            DeliveryCountryCode = debtor?._Country == 0 ? "DK" : debtor?._Country.ToString(),
+            DeliveryCountryCode = debtor is null ? null : UnicontaCountry.ToIsoCode(debtor._Country) ?? "DK",
             // Additional fields for JD mapping
             DeliveryDate = o._DeliveryDate == default ? null : o._DeliveryDate,
             TrackingNote = o.GetUserField(UnicontaUserFields.TrackingNote) as string,
