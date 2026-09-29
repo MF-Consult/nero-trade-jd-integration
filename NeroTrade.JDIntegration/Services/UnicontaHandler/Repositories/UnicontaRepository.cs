@@ -135,6 +135,15 @@ public class UnicontaRepository(
         return ProjectPurchaseOrder(o, lines);
     }
 
+    // Item-name getters (and the Text property) on SDK line objects resolve through the client-side item cache; if it is not
+    // loaded they may return null or throw. The name is only a secondary match for NonWarehouseItems, so
+    // a failure here must never drop or break a line.
+    private static string? SafeName(Func<string?> getName)
+    {
+        try { return getName(); }
+        catch { return null; }
+    }
+
     private static LocalPurchaseOrder ProjectPurchaseOrder(CreditorOrderClient o, IEnumerable<CreditorOrderLineClient>? lines)
     {
         var po = new LocalPurchaseOrder
@@ -162,6 +171,9 @@ public class UnicontaRepository(
 
         foreach (var l in lines ?? Enumerable.Empty<CreditorOrderLineClient>())
         {
+            // Transport / print plates / prepayments are not goods; JD would reject the whole shipment.
+            if (NonWarehouseItems.IsExcluded(l._Item, l._Text, SafeName(() => l.Name))) continue;
+
             po.Lines.Add(new LocalPurchaseOrderLine
             {
                 Sku = l._Item,
@@ -753,6 +765,7 @@ public class UnicontaRepository(
             // Only physical stock lines go to JD; skip fee/charge lines and blank items.
             if (string.IsNullOrWhiteSpace(l.Item)) continue;
             if (!string.Equals(l.Group, StockLineGroup, StringComparison.OrdinalIgnoreCase)) continue;
+            if (NonWarehouseItems.IsExcluded(l.Item, l._Text, SafeName(() => l.ItemName))) continue;
 
             invoice.Lines.Add(new LocalPurchaseInvoiceLine
             {
