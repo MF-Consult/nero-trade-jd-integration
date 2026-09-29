@@ -13,9 +13,10 @@ public class NonWarehouseItemsTests
     [InlineData("PRINTPLA", null)]
     [InlineData("printpla", null)]
     [InlineData(" Forud ", null)]
-    [InlineData("TRP-01", "Cargo - Transport")]
-    [InlineData("TRP-02", "cargo transport internal")]
-    [InlineData("Cargo - Transport", null)]
+    [InlineData("1200", null)]
+    [InlineData("7", null)]
+    [InlineData("TRP-01", "Cargo - Internal")]
+    [InlineData("TRP-02", "cargo transport")]
     public void IsExcluded_MatchesItemNumberOrName(string? itemNumber, string? itemName)
     {
         Assert.True(NonWarehouseItems.IsExcluded(itemNumber, itemName));
@@ -26,13 +27,15 @@ public class NonWarehouseItemsTests
     {
         // Without the SDK's client-side item cache the item-name getter returns null; the line text,
         // which Uniconta pre-fills with the item name, carries the name instead.
-        Assert.True(NonWarehouseItems.IsExcluded("TRP-01", "Cargo - Transport", null));
+        Assert.True(NonWarehouseItems.IsExcluded("TRP-01", "Cargo Transport", null));
     }
 
     [Theory]
     [InlineData("TRBFTELIPWW610", "Some product")]
     [InlineData("FORUD2", null)]           // exact match only — no prefix/substring hits
     [InlineData("Cargo", "Cargo - Transportkasse")]
+    [InlineData("70", null)]
+    [InlineData("12000", null)]
     [InlineData(null, null)]
     public void IsExcluded_LeavesRealItemsAlone(string? itemNumber, string? itemName)
     {

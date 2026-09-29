@@ -9,7 +9,7 @@ namespace NeroTrade.JDIntegration.Services.UnicontaHandler.Constants;
 ///
 /// Static by agreement with Nero Trade (Maiwand, 2026-09-29): add an entry here when a new cost item shows up.
 /// Matching is exact, case-insensitive, after trimming. The item number is the reliable key. The line text and the
-/// item name are matched too, because the transport items were named by their description — but note that the
+/// item name are matched too, as a fallback for entries listed by name — but note that the
 /// SDK's item-name getters depend on a client-side item cache (without it, verified 2026-09-29:
 /// <c>CreditorOrderLineClient.Name</c> returns null, <c>CreditorInvoiceLines.ItemName</c> throws), so the name
 /// match mainly rides on the line's stored text (<c>_Text</c> — read the raw field: the <c>Text</c> property falls
@@ -22,8 +22,10 @@ public static class NonWarehouseItems
     {
         "PRINTPLA",                 // printplader
         "Forud",                    // forudbetalinger
-        "Cargo - Transport",        // transport
-        "Cargo Transport Internal", // transport
+        "1200",                     // Cargo - Internal (transport)
+        "7",                        // Cargo Transport (transport)
+        "Cargo - Internal",
+        "Cargo Transport",
     };
 
     /// <param name="itemNumber">The line's item number (<c>_Item</c>) — the reliable key.</param>
