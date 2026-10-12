@@ -291,7 +291,8 @@ public sealed class JdLogisticsService(
                         continue;
                     }
 
-                    _logger.LogInformation("Request order {ShopOrderId} has significant changes, deleting and recreating", key);
+                    var changes = DescribeChanges(existingOrder, order);
+                    _logger.LogInformation("Request order {ShopOrderId} has significant changes ({Changes}), deleting and recreating", key, string.Join(", ", changes));
 
                     var deleted = await repository.DeleteRequestOrderAsync(inventoryId, existingOrder.id.Value, cancellationToken);
                     if (!deleted.ok)
@@ -303,6 +304,8 @@ public sealed class JdLogisticsService(
                     var created = await repository.CreateRequestOrderAsync(inventoryId, order, cancellationToken);
                     if (created.ok) { result.SuccessCount++; RecordJdId(result, order, created.returned?.id); }
                     else result.Failures.Add(new UpsertFailure<JdRequestOrderCreate>(order, created.status, created.message));
+
+                    await LogRecreationAsync(key, existingOrder, order, changes, created.ok ? created.returned?.id : null, cancellationToken);
                 }
                 else
                 {
@@ -321,6 +324,37 @@ public sealed class JdLogisticsService(
         return result;
     }
 
+    // Audit row for a delete-and-recreate: the old JD id (now Annulleret), the new one, which fields differed
+    // and the delivery address before/after. JD order numbers are otherwise not in integration_logs, so
+    // "why was JD order X cancelled / why does Y have another address" could not be answered from the log.
+    private Task LogRecreationAsync(string key, JdRequestOrder existing, JdRequestOrderCreate incoming, List<string> changes, long? newJdId, CancellationToken ct)
+    {
+        var payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            shop_order_key = key,
+            old_jd_order_id = existing.id,
+            new_jd_order_id = newJdId,
+            old_stage = existing.stage,
+            changed_fields = changes,
+            old_address = FormatAddress(existing.inOutAddress?.name, existing.inOutAddress?.street, existing.inOutAddress?.zip, existing.inOutAddress?.city, existing.inOutAddress?.countryCode),
+            new_address = FormatAddress(incoming.address?.name, incoming.address?.street, incoming.address?.zip, incoming.address?.city, incoming.address?.countryCode)
+        });
+        return integrationLogger.LogAsync(new IntegrationLogEntry(
+            supabaseOptions.IntegrationName,
+            newJdId.HasValue ? "info" : "warning",
+            "JD",
+            incoming.SourceOrderNumber?.ToString() ?? key,
+            newJdId.HasValue
+                ? $"JD order {existing.id} replaced by {newJdId} for {key} (changed: {string.Join(", ", changes)})."
+                : $"JD order {existing.id} was deleted for {key} (changed: {string.Join(", ", changes)}) but the replacement could not be created.",
+            null,
+            payload)
+        {
+            CorrelationId = Guid.NewGuid(),
+            ErrorCode = newJdId.HasValue ? null : "JD_RECREATE_FAILED"
+        }, ct);
+    }
+
     // Map JD's request-order id back to the source (Uniconta) order number so the caller can write
     // it onto the sales order. No-op when either id is missing.
     private static void RecordJdId(UpsertResult<JdRequestOrderCreate> result, JdRequestOrderCreate order, long? jdId)
@@ -336,45 +370,26 @@ public sealed class JdLogisticsService(
     /// Compares date, address, contact person, product items, and tracking notes.
     /// </summary>
     private static bool RequiresRecreation(JdRequestOrder existing, JdRequestOrderCreate incoming)
+        => DescribeChanges(existing, incoming).Count > 0;
+
+    /// <summary>
+    /// Names the fields that differ between the JD order and the incoming one. Empty means no recreation
+    /// is needed. Also logged when an order is recreated so staff can see what triggered it.
+    /// </summary>
+    private static List<string> DescribeChanges(JdRequestOrder existing, JdRequestOrderCreate incoming)
     {
-        // Compare tracking note
-        if (!string.Equals(existing.trackingNote, incoming.trackingNote, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        // Compare delivery note text
-        if (!string.Equals(existing.deliveryNoteText, incoming.deliveryNoteText, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        // Compare Shipmondo carrier code
-        if (!string.Equals(existing.shipmondo?.carrierCode, incoming.shipmondo?.carrierCode, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        // Compare address
-        if (HasAddressChanged(existing.inOutAddress, incoming.address))
-        {
-            return true;
-        }
-
-        // Compare contact person
-        if (HasContactChanged(existing.inOutContact, incoming.contactPerson))
-        {
-            return true;
-        }
-
-        // Compare product items
-        if (HasProductItemsChanged(existing.productItems, incoming.productItems))
-        {
-            return true;
-        }
-
-        return false;
+        var changes = new List<string>();
+        if (!string.Equals(existing.trackingNote, incoming.trackingNote, StringComparison.Ordinal)) changes.Add("trackingNote");
+        if (!string.Equals(existing.deliveryNoteText, incoming.deliveryNoteText, StringComparison.Ordinal)) changes.Add("deliveryNoteText");
+        if (!string.Equals(existing.shipmondo?.carrierCode, incoming.shipmondo?.carrierCode, StringComparison.Ordinal)) changes.Add("carrierCode");
+        if (HasAddressChanged(existing.inOutAddress, incoming.address)) changes.Add("address");
+        if (HasContactChanged(existing.inOutContact, incoming.contactPerson)) changes.Add("contactPerson");
+        if (HasProductItemsChanged(existing.productItems, incoming.productItems)) changes.Add("productItems");
+        return changes;
     }
+
+    private static string FormatAddress(string? name, string? street, string? zip, string? city, string? countryCode)
+        => $"{name} | {street} | {zip} {city} | {countryCode}";
 
     private static bool HasAddressChanged(JdRequestOrderAddress? existing, JdAddress? incoming)
     {
