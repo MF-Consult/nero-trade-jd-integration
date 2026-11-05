@@ -126,7 +126,11 @@ public sealed class JdLogisticsService(
             {
                 item.id = existing.id.Value;
                 var updated = await repository.UpdateCatalogItemAsync(existing.id.Value, item, cancellationToken);
-                if (updated.ok) result.SuccessCount++; else result.Failures.Add(new UpsertFailure<JdCatalogItem>(item, updated.status, updated.message));
+                if (updated.ok) result.SuccessCount++;
+                // JD rejects the PUT with "already exist" when the SKU is duplicated in its catalog
+                // (two rows, same SKU) — retrying can never succeed; flag it once instead of every tick.
+                else if (IsSkuAlreadyExists(updated.status, updated.message)) { result.SuccessCount++; result.AlreadyExistingItems.Add(item); }
+                else result.Failures.Add(new UpsertFailure<JdCatalogItem>(item, updated.status, updated.message));
             }
             else
             {
