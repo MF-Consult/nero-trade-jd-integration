@@ -117,12 +117,12 @@ public sealed class SyncItemsToJd(
             _alreadyExistsWarnedAt[existing.sku] = now;
             await integrationLogger.LogAsync(new IntegrationLogEntry(
                 integrationLogger.IntegrationName, "warning", "JD", existing.sku,
-                $"Catalog item {existing.sku} already exists in JD but is not in the catalog list (inactive/archived?). Not updated.", null, null)
+                $"Catalog item {existing.sku} is rejected by JD as 'already exist' (duplicate SKU in the JD catalog, or inactive/archived). Not updated.", null, null)
             {
                 CorrelationId = logScope.CorrelationId,
                 ErrorCode = "JD_CATALOG_ALREADY_EXISTS",
                 Retryable = false,
-                SuggestedAction = "Check the SKU in JD (inactive/archived?) and reactivate it there if changes should sync."
+                SuggestedAction = "Delete the duplicate catalog row for this SKU in JD (or reactivate it if archived) so updates can sync again."
             }, ct);
         }
 
