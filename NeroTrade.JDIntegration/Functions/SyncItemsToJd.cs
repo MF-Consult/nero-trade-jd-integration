@@ -18,6 +18,8 @@ public sealed class SyncItemsToJd(
     IIntegrationLogger integrationLogger,
     ILogger<SyncItemsToJd> logger)
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _alreadyExistsWarnedAt = new(StringComparer.OrdinalIgnoreCase);
+
     // Invoked by SyncDispatcher, not by its own timer — see that class. The scheduler gate below
     // still decides whether this tick does any work, so the configured cadence is unchanged.
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -103,6 +105,25 @@ public sealed class SyncItemsToJd(
                 created.sku,
                 logScope.CorrelationId,
                 ct);
+        }
+
+        // SKU exists in JD but is missing from the catalog list we read (likely inactive/archived
+        // there), so it can neither be created nor updated. Warn once per SKU per day — not every tick.
+        foreach (var existing in result.AlreadyExistingItems)
+        {
+            if (string.IsNullOrWhiteSpace(existing.sku)) continue;
+            var now = DateTime.UtcNow;
+            if (_alreadyExistsWarnedAt.TryGetValue(existing.sku, out var last) && now - last < TimeSpan.FromHours(24)) continue;
+            _alreadyExistsWarnedAt[existing.sku] = now;
+            await integrationLogger.LogAsync(new IntegrationLogEntry(
+                integrationLogger.IntegrationName, "warning", "JD", existing.sku,
+                $"Catalog item {existing.sku} already exists in JD but is not in the catalog list (inactive/archived?). Not updated.", null, null)
+            {
+                CorrelationId = logScope.CorrelationId,
+                ErrorCode = "JD_CATALOG_ALREADY_EXISTS",
+                Retryable = false,
+                SuggestedAction = "Check the SKU in JD (inactive/archived?) and reactivate it there if changes should sync."
+            }, ct);
         }
 
         foreach (var failure in result.Failures)
