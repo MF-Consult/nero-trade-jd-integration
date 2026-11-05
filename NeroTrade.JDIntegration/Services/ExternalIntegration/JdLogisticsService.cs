@@ -137,6 +137,13 @@ public sealed class JdLogisticsService(
                     result.CreatedItems.Add(item);
                     if (created.returned?.id != null) _existingItemsBySku[item.sku] = created.returned;
                 }
+                else if (IsSkuAlreadyExists(created.status, created.message))
+                {
+                    // JD has the SKU but GET /api/catalog did not list it, so we cannot PUT it
+                    // (no id). Re-creating can never succeed — don't retry-fail every tick.
+                    result.SuccessCount++;
+                    result.AlreadyExistingItems.Add(item);
+                }
                 else
                 {
                     result.Failures.Add(new UpsertFailure<JdCatalogItem>(item, created.status, created.message));
@@ -145,6 +152,10 @@ public sealed class JdLogisticsService(
         }
         return result;
     }
+
+    internal static bool IsSkuAlreadyExists(int status, string? message)
+        => status is >= 400 and < 500
+           && message?.Contains("already exist", StringComparison.OrdinalIgnoreCase) == true;
 
     // Incoming shipments (purchase orders)
     public async Task<CreateResult<JdIncomingShipmentCreate>> CreateIncomingShipmentsAsync(IEnumerable<JdIncomingShipmentCreate> shipments, CancellationToken cancellationToken)

@@ -14,6 +14,13 @@ public sealed record UpsertResult<T>
     public List<UpsertFailure<T>> Failures { get; } = new();
 
     /// <summary>
+    /// Items JD refused to create because the SKU already exists there, although the catalog list
+    /// we read did not contain it (e.g. inactive/archived in JD). Not a failure — the item is in
+    /// JD — but surfaced so the caller can flag it once instead of erroring on every tick.
+    /// </summary>
+    public List<T> AlreadyExistingItems { get; } = new();
+
+    /// <summary>
     /// JD's request-order id per source (Uniconta) order number, for orders that were created,
     /// recreated, or already existed in JD this run. Lets the caller write JD's id back onto the
     /// Uniconta sales order without a second JD round-trip.

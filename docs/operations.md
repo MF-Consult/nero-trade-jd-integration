@@ -353,6 +353,7 @@ Convention: `SUBSYSTEM_REASON`, SCREAMING_SNAKE. Extend freely — new codes don
 | `JD_RATE_LIMITED`             | JD returned 429.                                                                        |
 | `JD_5XX`                      | JD returned a server error.                                                             |
 | `JD_VALIDATION_REJECTED`      | JD accepted the request but rejected the payload. **Not retryable** — data fix needed.  |
+| `JD_CATALOG_ALREADY_EXISTS`   | `SyncItemsToJd`: JD answered "Catalog with SKU … already exist" on create, but the SKU is not in `GET /api/catalog` (likely inactive/archived in JD), so it can't be updated. **Warning**, not retryable; logged once per SKU per day. Reactivate/inspect the SKU in JD. |
 | `JD_LOOKUP_MISS`              | JD returned 404 for an expected record.                                                 |
 | `JD_CONTAINER_TYPE_UNMAPPED`  | An incoming-shipment line's unit matched no JD container type; the line shipped as `Stk`. **Not retryable** — add the translation in `UnitTranslator` or the container type in JD. |
 | `UNICONTA_TIMEOUT`            | A Uniconta SDK call did not answer within `UnicontaConfig.TimeoutSeconds` (default 30 s). **Warning**, retryable — the session is invalidated and the next tick reconnects. Before this bound existed, such a call hung the invocation until the 30-minute `FunctionTimeout` killed it and the host restarted the worker (14× in the 30 days to 2026-07-27). |
