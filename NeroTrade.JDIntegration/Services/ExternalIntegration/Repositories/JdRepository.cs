@@ -258,7 +258,14 @@ public sealed class JdRepository : IJdRepository
             var qs = $"pageNumber={page}&pageSize={pageSize}";
             var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/inventories/{inventoryId}/requestorders?{qs}"), cancellationToken);
             if (!response.IsSuccessStatusCode)
-                break;
+            {
+                // Fail loudly. This used to `break` and return the pages read so far: a failed page 3 of 8
+                // silently produced a truncated list, and the sales-order dedup (UpsertRequestOrdersAsync)
+                // treats "not in the list" as "not in JD" and would create a duplicate request order.
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                _logger.LogWarning("JD GET request orders failed on page {Page}: {Status} {Body}", page, (int)response.StatusCode, body);
+                throw new JdLookupFailedException($"requestorders (page {page})", (int)response.StatusCode, body);
+            }
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             var pagePayload = await JsonSerializer.DeserializeAsync<JdPagedResponse<JdRequestOrder>>(stream, cancellationToken: cancellationToken)
                               ?? new JdPagedResponse<JdRequestOrder>();

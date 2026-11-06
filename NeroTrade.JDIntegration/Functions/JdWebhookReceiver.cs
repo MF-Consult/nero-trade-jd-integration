@@ -5,6 +5,7 @@ using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Models.Settings;
 using NeroTrade.JDIntegration.Services.JdWebhook;
+using NeroTrade.JDIntegration.Services.Logging;
 using NeroTrade.JDIntegration.Services.Scheduling;
 
 namespace NeroTrade.JDIntegration.Functions;
@@ -26,6 +27,7 @@ namespace NeroTrade.JDIntegration.Functions;
 public sealed class JdWebhookReceiver(
     SyncScheduler scheduler,
     JdWebhookOptions options,
+    IIntegrationLogger integrationLogger,
     ILogger<JdWebhookReceiver> logger)
 {
     [Function("JdWebhookReceiver")]
@@ -48,6 +50,10 @@ public sealed class JdWebhookReceiver(
             var name = ReadString(doc.RootElement, "WebhookTypeName");
             var job = type.HasValue ? JdWebhookRouter.JobFor(type.Value) : null;
 
+            // One info row per accepted event, so webhook delivery can be measured against what polling finds
+            // (events per day, per type, and which job each one nudged). Best-effort: never fails the call.
+            await RecordAsync(name, type, jobId, job);
+
             if (job != null)
             {
                 scheduler.RequestRunNow(job);
@@ -66,6 +72,23 @@ public sealed class JdWebhookReceiver(
         }
 
         return req.CreateResponse(HttpStatusCode.OK);
+    }
+
+    private async Task RecordAsync(string? name, int? type, string? jobId, string? job)
+    {
+        try
+        {
+            await integrationLogger.LogAsync(new IntegrationLogEntry(
+                integrationLogger.IntegrationName, "info", "JD", null,
+                $"JD webhook {name ?? "?"} received" + (job != null ? $"; {job} will run on the next tick." : "; no job to trigger."),
+                null,
+                JsonSerializer.SerializeToElement(new { webhookType = type, webhookTypeName = name, jdJobId = jobId, triggeredJob = job })),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not record JD webhook in integration_logs (jobId={JobId})", jobId);
+        }
     }
 
     private static string? FirstHeader(HttpRequestData req, string name)

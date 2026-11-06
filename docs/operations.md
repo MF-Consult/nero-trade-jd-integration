@@ -276,6 +276,7 @@ POST https://api.jdlogistik.dk/api/webhooks
 → put the returned `secret` in `JdWebhook__Secret`. Only after events are seen arriving (look for the
 `JD webhook … accepted` log lines) slow `RequestOrderStatus` / `ReceivedQuantity` in `SyncScheduling`; the
 calls saved fund a faster Uniconta→JD cadence. JD source IPs (per its docs): 13.74.38.39, 13.79.81.45.
+Each accepted event also writes an info row (`JD webhook <type> received…`) to `integration_logs`, so delivery can be measured; ready-made queries for this and other health checks are in [ops-queries.md](ops-queries.md).
 
 ---
 
