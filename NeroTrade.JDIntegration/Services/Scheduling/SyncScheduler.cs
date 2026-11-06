@@ -20,6 +20,20 @@ public sealed class SyncScheduler
     private readonly ILogger<SyncScheduler> _logger;
     private readonly TimeZoneInfo _timeZone;
     private readonly ConcurrentDictionary<string, DateTime> _lastRunUtc = new();
+    private readonly ConcurrentDictionary<string, byte> _runNow = new();
+
+    /// <summary>
+    /// Minimum spacing between two event-driven runs of the same job. A burst of webhooks (a whole batch of
+    /// orders dispatched at once) then costs one run, not one per event, which keeps the Uniconta call budget bounded.
+    /// </summary>
+    public static readonly TimeSpan RunNowMinGap = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Asks for the job to run on the next dispatcher tick (≤30 s) regardless of its configured cadence — used by
+    /// the JD webhook endpoint. The request is consumed by the next <see cref="TryBeginRun"/>; it is subject to
+    /// <see cref="RunNowMinGap"/> and to the normal in-memory, single-instance assumption.
+    /// </summary>
+    public void RequestRunNow(string job) => _runNow[job] = 1;
 
     public SyncScheduler(SyncSchedulingOptions options, ILogger<SyncScheduler> logger)
     {
@@ -68,7 +82,16 @@ public sealed class SyncScheduler
         var lastRun = _lastRunUtc.TryGetValue(job, out var last) ? last : DateTime.MinValue;
 
         if (!IsDue(interval, nowUtc, lastRun))
-            return false;
+        {
+            // Event-driven early run (JD webhook): honour it once, but never closer than RunNowMinGap to the
+            // previous run. A request that arrives too early stays queued for a later tick.
+            if (!(_runNow.ContainsKey(job) && nowUtc - lastRun >= RunNowMinGap && _runNow.TryRemove(job, out _)))
+                return false;
+        }
+        else
+        {
+            _runNow.TryRemove(job, out _); // the scheduled run covers the request
+        }
 
         _lastRunUtc[job] = nowUtc;
         return true;

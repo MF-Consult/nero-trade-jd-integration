@@ -33,6 +33,10 @@ builder.Services.Configure<SyncSchedulingOptions>(builder.Configuration.GetSecti
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<SyncSchedulingOptions>>().Value);
 builder.Services.AddSingleton<SyncScheduler>();
 
+// Inbound JD webhook (JD -> Uniconta status/quantity nudges). Secret empty = endpoint rejects everything.
+builder.Services.Configure<JdWebhookOptions>(builder.Configuration.GetSection(JdWebhookOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<JdWebhookOptions>>().Value);
+
 // Behaviour switches for the purchase-order sync (e.g. auto-creating missing catalog items).
 builder.Services.Configure<PurchaseOrderSyncOptions>(builder.Configuration.GetSection(PurchaseOrderSyncOptions.SectionName));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<PurchaseOrderSyncOptions>>().Value);
