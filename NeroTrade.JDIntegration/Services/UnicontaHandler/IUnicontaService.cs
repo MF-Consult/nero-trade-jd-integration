@@ -6,6 +6,7 @@ public interface IUnicontaService
 {
     IAsyncEnumerable<LocalDebtor> ReadDebtorsBatchedAsync(int batchSize, CancellationToken cancellationToken);
     IAsyncEnumerable<LocalInventoryItem> ReadItemsBatchedAsync(int batchSize, CancellationToken cancellationToken);
+    Task<IReadOnlyList<LocalInventoryItem>> ReadItemsBySkusAsync(IReadOnlyCollection<string> skus, CancellationToken cancellationToken);
     IAsyncEnumerable<LocalPurchaseOrder> ReadPurchaseOrdersBatchedAsync(int batchSize, CancellationToken cancellationToken);
     IAsyncEnumerable<LocalSalesOrder> ReadSalesOrdersBatchedAsync(int batchSize, CancellationToken cancellationToken);
 

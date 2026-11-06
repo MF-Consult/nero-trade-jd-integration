@@ -54,6 +54,37 @@ public class IncomingShipmentCatalogResolutionTests
     }
 
     [Fact]
+    public async Task FindMissingCatalogSkus_ReportsOnlyUnknownProductSkus()
+    {
+        var repo = new FakeJdRepository { CatalogItems = { new JdCatalogItem { id = 1, sku = "KNOWN" } } };
+        var service = BuildService(repo);
+        var shipment = MapPo(101, ("KNOWN", "PC-1"), ("  NEW-1 ", "PC-2"), ("new-1", "PC-3"));
+
+        var missing = await service.FindMissingCatalogSkusAsync(new[] { shipment }, CancellationToken.None);
+
+        Assert.Equal(new[] { "NEW-1" }, missing); // trimmed, de-duplicated case-insensitively, known SKU omitted
+    }
+
+    [Fact]
+    public async Task MissingSku_CreatedInCatalogFirst_ThenShipmentIsSent()
+    {
+        // The auto-create flow of SyncPurchaseOrdersToJd, minus the Uniconta read: find the gap, create the
+        // items, and the very same shipment now resolves and is POSTed instead of being rejected.
+        var repo = new FakeJdRepository();
+        var service = BuildService(repo);
+        var shipment = MapPo(102, ("NEW-1", "PC-1"));
+
+        var missing = await service.FindMissingCatalogSkusAsync(new[] { shipment }, CancellationToken.None);
+        var upsert = await service.UpsertItemsAsync(missing.Select(sku => new JdCatalogItem { sku = sku, name = "n" }), CancellationToken.None);
+        var result = await service.CreateIncomingShipmentsAsync(new[] { shipment }, CancellationToken.None);
+
+        Assert.Equal("NEW-1", Assert.Single(upsert.CreatedItems).sku);
+        Assert.Equal(1, result.SuccessCount);
+        Assert.Empty(result.Failures);
+        Assert.Equal(9001, Assert.Single(Assert.Single(repo.SentShipments).lines).catalog!.id);
+    }
+
+    [Fact]
     public async Task SkuWithSurroundingWhitespace_MatchesTrimmedCatalogKey()
     {
         // The catalog cache is keyed on the trimmed SKU (ItemMapper trims). A PO line whose SKU has
@@ -168,7 +199,12 @@ public class IncomingShipmentCatalogResolutionTests
         public Task<IReadOnlyList<JdAddress>> GetAddressesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<(bool ok, int status, string message, JdAddress? returned)> CreateAddressAsync(JdAddress address, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<(bool ok, int status, string message)> UpdateAddressAsync(long id, JdAddress address, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<(bool ok, int status, string message, JdCatalogItem? returned)> CreateCatalogItemAsync(JdCatalogItem item, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public List<JdCatalogItem> CreatedCatalogItems { get; } = new();
+        public Task<(bool ok, int status, string message, JdCatalogItem? returned)> CreateCatalogItemAsync(JdCatalogItem item, CancellationToken cancellationToken)
+        {
+            CreatedCatalogItems.Add(item);
+            return Task.FromResult((true, 201, "ok", (JdCatalogItem?)new JdCatalogItem { id = 9000 + CreatedCatalogItems.Count, sku = item.sku }));
+        }
         public Task<(bool ok, int status, string message)> UpdateCatalogItemAsync(long id, JdCatalogItem item, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<(bool ok, int status, string message, JdIncomingShipment? returned)> GetIncomingShipmentByIdAsync(long id, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<JdInventory>> GetInventoriesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();

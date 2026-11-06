@@ -33,6 +33,10 @@ builder.Services.Configure<SyncSchedulingOptions>(builder.Configuration.GetSecti
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<SyncSchedulingOptions>>().Value);
 builder.Services.AddSingleton<SyncScheduler>();
 
+// Behaviour switches for the purchase-order sync (e.g. auto-creating missing catalog items).
+builder.Services.Configure<PurchaseOrderSyncOptions>(builder.Configuration.GetSection(PurchaseOrderSyncOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<PurchaseOrderSyncOptions>>().Value);
+
 // Supabase integration logging
 builder.Services.Configure<SupabaseOptions>(builder.Configuration.GetSection("Supabase"));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<SupabaseOptions>>().Value);

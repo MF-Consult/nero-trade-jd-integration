@@ -6,6 +6,8 @@ public interface IJdLogisticsService
 {
     Task<UpsertResult<JdAddress>> UpsertAddressesAsync(IEnumerable<JdAddress> addresses, CancellationToken cancellationToken);
     Task<UpsertResult<JdCatalogItem>> UpsertItemsAsync(IEnumerable<JdCatalogItem> items, CancellationToken cancellationToken);
+    /// <summary>SKUs on the given shipments' product lines that have no catalog item (with an id) in JD.</summary>
+    Task<IReadOnlyList<string>> FindMissingCatalogSkusAsync(IEnumerable<JdIncomingShipmentCreate> shipments, CancellationToken cancellationToken);
     Task<CreateResult<JdIncomingShipmentCreate>> CreateIncomingShipmentsAsync(IEnumerable<JdIncomingShipmentCreate> shipments, CancellationToken cancellationToken);
     Task<IReadOnlyList<JdIncomingShipment>> GetIncomingShipmentsAsync(CancellationToken cancellationToken);
     Task<JdIncomingShipment?> GetIncomingShipmentByIdAsync(long id, CancellationToken cancellationToken);
