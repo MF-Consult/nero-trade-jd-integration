@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using NeroTrade.JDIntegration.Models.ExternalIntegration;
 using NeroTrade.JDIntegration.Models.Settings;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
+using NeroTrade.JDIntegration.Services.JdWebhook;
 using NeroTrade.JDIntegration.Services.Logging;
 using NeroTrade.JDIntegration.Services.Scheduling;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
@@ -16,6 +17,8 @@ public sealed class SyncRequestOrderStatusToUniconta(
     IJdLogisticsService jd,
     IUnicontaService uniconta,
     IOptions<StatusMappingConfig> config,
+    RequestOrderSyncOptions syncOptions,
+    JdWebhookOptions webhookOptions,
     SyncScheduler scheduler,
     IIntegrationLogger integrationLogger,
     ILogger<SyncRequestOrderStatusToUniconta> logger)
@@ -55,11 +58,17 @@ public sealed class SyncRequestOrderStatusToUniconta(
                 return;
             }
 
-            // 2. Fetch all JD Request Orders
-            // We fetch all because we don't know which ones changed status relative to Uniconta without checking.
-            // In a larger system, we might filter by modified date if we tracked last sync time.
-            logger.LogInformation("Fetching Request Orders from JD inventory {InventoryId}...", inventory.id);
-            var jdOrders = await jd.GetRequestOrdersAsync(inventory.id.Value, token);
+            // 2. Fetch JD Request Orders. JD has no "changed since" filter, so a regular run reads only the recent
+            // window (the list is newest-first, so that is the first page or two instead of all ~8) and one run per
+            // FullSweepHours reads everything, which bounds how late an old order's status change can be noticed.
+            var nowUtc = DateTime.UtcNow;
+            var fullSweep = syncOptions.RecentWindowDays <= 0
+                            || scheduler.IsFullSweepDue("RequestOrderStatus", nowUtc, TimeSpan.FromHours(Math.Max(1, syncOptions.FullSweepHours)));
+            logger.LogInformation("Fetching Request Orders from JD inventory {InventoryId} ({Mode})...", inventory.id, fullSweep ? "full sweep" : $"last {syncOptions.RecentWindowDays} days");
+            var jdOrders = fullSweep
+                ? await jd.GetRequestOrdersAsync(inventory.id.Value, token)
+                : await jd.GetRecentRequestOrdersAsync(inventory.id.Value, nowUtc.AddDays(-syncOptions.RecentWindowDays), token);
+            if (fullSweep) scheduler.MarkFullSweep("RequestOrderStatus", nowUtc);
             logger.LogInformation("Fetched {Count} orders from JD", jdOrders.Count);
 
             // 3. Fetch Uniconta orders with their current groups
@@ -76,6 +85,7 @@ public sealed class SyncRequestOrderStatusToUniconta(
             int updatedCount = 0;
             int errorCount = 0;
             int skippedCount = 0;
+            var updatedOrderNumbers = new List<int>();
 
             // A cancelled JD order can linger (excluded from outbound dedup but JD never hard-removes it)
             // alongside a freshly created one sharing the same "SO {n}" reference. Group all JD orders by
@@ -152,6 +162,7 @@ public sealed class SyncRequestOrderStatusToUniconta(
                 if (success)
                 {
                     updatedCount++;
+                    updatedOrderNumbers.Add(orderNumber);
                     await integrationLogger.LogAsync(new IntegrationLogEntry(
                         integrationLogger.IntegrationName, "info", "Integration", orderNumber.ToString(),
                         $"Sales order {orderNumber} status updated to '{targetGroup}' from JD.", null, null)
@@ -183,10 +194,32 @@ public sealed class SyncRequestOrderStatusToUniconta(
             logger.LogInformation("Sync Completed. Updated: {Updated}, Errors: {Errors}, Skipped/NoChange: {Skipped}",
                 updatedCount, errorCount, skippedCount);
 
-            if (updatedCount > 0 || errorCount > 0)
+            // Webhook vs. poll: a status change the poll finds while no webhook arrived recently means JD did not announce
+            // it (webhook broken, unregistered, or its secret rotated). Warn so that is noticed instead of just being
+            // slower. Only meaningful once a secret is configured; staff-visible customers are not mailed (warning level).
+            if (WebhookReconciliation.IsMissed(!string.IsNullOrEmpty(webhookOptions.Secret), scheduler.LastWebhookUtc("RequestOrderStatus"), DateTime.UtcNow, updatedCount))
             {
-                run.AttachCompletionPayload(new { processed = updatedCount + errorCount + skippedCount, succeeded = updatedCount, failed = errorCount, skipped = skippedCount });
+                await integrationLogger.LogAsync(new IntegrationLogEntry(
+                    integrationLogger.IntegrationName, "warning", "JD", null,
+                    $"Poll found {updatedCount} status change(s) that no JD webhook announced (orders: {string.Join(", ", updatedOrderNumbers)}).", null,
+                    JsonSerializer.SerializeToElement(new { orders = updatedOrderNumbers, lastWebhookUtc = scheduler.LastWebhookUtc("RequestOrderStatus") }))
+                {
+                    CorrelationId = logScope.CorrelationId,
+                    ErrorCode = "JD_WEBHOOK_MISSED",
+                    Retryable = false,
+                    SuggestedAction = "Check GET /api/webhooks at JD (is it registered, correct URL?), JdWebhook__Secret in the Function App, and 'JD webhook … received' rows; polling still delivered the change."
+                }, token);
             }
+
+            run.AttachCompletionPayload(new
+            {
+                processed = updatedCount + errorCount + skippedCount,
+                succeeded = updatedCount,
+                failed = errorCount,
+                skipped = skippedCount,
+                jdOrdersRead = jdOrders.Count,
+                fullSweep
+            });
         }
         catch (UnicontaConnectionUnavailableException ex)
         {

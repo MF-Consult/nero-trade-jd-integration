@@ -12,6 +12,8 @@ using NeroTrade.JDIntegration.Services.UnicontaHandler.Mappers;
 using NeroTrade.JDIntegration.Services.ExternalIntegration.Repositories;
 using NeroTrade.JDIntegration.Services.PdfGeneration;
 using NeroTrade.JDIntegration.Services.Logging;
+using NeroTrade.JDIntegration.Services.Alerts;
+using Microsoft.Extensions.Logging;
 using NeroTrade.JDIntegration.Services.Scheduling;
 
 var builder = FunctionsApplication.CreateBuilder(args);
@@ -33,6 +35,18 @@ builder.Services.Configure<SyncSchedulingOptions>(builder.Configuration.GetSecti
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<SyncSchedulingOptions>>().Value);
 builder.Services.AddSingleton<SyncScheduler>();
 
+// How much of JD's request-order history the status sync reads per run (recent window + daily full sweep).
+builder.Services.Configure<RequestOrderSyncOptions>(builder.Configuration.GetSection(RequestOrderSyncOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<RequestOrderSyncOptions>>().Value);
+
+// Inbound JD webhook (JD -> Uniconta status/quantity nudges). Secret empty = endpoint rejects everything.
+builder.Services.Configure<JdWebhookOptions>(builder.Configuration.GetSection(JdWebhookOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<JdWebhookOptions>>().Value);
+
+// Behaviour switches for the purchase-order sync (e.g. auto-creating missing catalog items).
+builder.Services.Configure<PurchaseOrderSyncOptions>(builder.Configuration.GetSection(PurchaseOrderSyncOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<PurchaseOrderSyncOptions>>().Value);
+
 // Supabase integration logging
 builder.Services.Configure<SupabaseOptions>(builder.Configuration.GetSection("Supabase"));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<SupabaseOptions>>().Value);
@@ -52,14 +66,41 @@ var supabaseServiceRoleKey = supabaseSection["ServiceRoleKey"];
 
 if (!string.IsNullOrWhiteSpace(supabaseBaseUrl) && !string.IsNullOrWhiteSpace(supabaseServiceRoleKey))
 {
-    builder.Services.AddHttpClient<IIntegrationLogger, SupabaseIntegrationLogger>((sp, client) =>
+    // Typed client for the real logger. Registered as the concrete type so it can optionally be wrapped below.
+    void ConfigureSupabaseClient(IServiceProvider sp, HttpClient client)
     {
         var options = sp.GetRequiredService<IOptions<SupabaseOptions>>().Value;
         client.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/rest/v1/");
         client.DefaultRequestHeaders.Add("apikey", options.ServiceRoleKey);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", options.ServiceRoleKey);
         client.Timeout = TimeSpan.FromSeconds(30);
-    });
+    }
+
+    var alertSection = builder.Configuration.GetSection(CustomerAlertOptions.SectionName);
+    var customerAlerts = new CustomerAlertOptions
+    {
+        Enabled = bool.TryParse(alertSection["Enabled"], out var alertsEnabled) && alertsEnabled,
+        ResendApiKey = alertSection["ResendApiKey"],
+        From = alertSection["From"],
+        To = alertSection["To"],
+        DedupHours = int.TryParse(alertSection["DedupHours"], out var dedupHours) ? dedupHours : 24
+    };
+    if (customerAlerts.IsComplete)
+    {
+        // Customer error mails via Resend: same logger, plus a best-effort mail for customer-actionable rows.
+        builder.Services.AddSingleton(customerAlerts);
+        builder.Services.AddHttpClient<SupabaseIntegrationLogger>(ConfigureSupabaseClient);
+        builder.Services.AddHttpClient<ICustomerAlertSender, ResendAlertSender>(c => c.Timeout = TimeSpan.FromSeconds(15));
+        builder.Services.AddTransient<IIntegrationLogger>(sp => new CustomerAlertingLogger(
+            sp.GetRequiredService<SupabaseIntegrationLogger>(),
+            sp.GetRequiredService<ICustomerAlertSender>(),
+            sp.GetRequiredService<CustomerAlertOptions>(),
+            sp.GetRequiredService<ILogger<CustomerAlertingLogger>>()));
+    }
+    else
+    {
+        builder.Services.AddHttpClient<IIntegrationLogger, SupabaseIntegrationLogger>(ConfigureSupabaseClient);
+    }
 }
 else
 {

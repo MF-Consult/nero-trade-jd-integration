@@ -248,7 +248,13 @@ public sealed class JdRepository : IJdRepository
         return data;
     }
 
-    public async Task<IReadOnlyList<JdRequestOrder>> GetRequestOrdersAsync(long inventoryId, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<JdRequestOrder>> GetRequestOrdersAsync(long inventoryId, CancellationToken cancellationToken)
+        => ReadRequestOrdersAsync(inventoryId, null, cancellationToken);
+
+    public Task<IReadOnlyList<JdRequestOrder>> GetRecentRequestOrdersAsync(long inventoryId, DateTime createdAfter, CancellationToken cancellationToken)
+        => ReadRequestOrdersAsync(inventoryId, createdAfter, cancellationToken);
+
+    private async Task<IReadOnlyList<JdRequestOrder>> ReadRequestOrdersAsync(long inventoryId, DateTime? createdAfter, CancellationToken cancellationToken)
     {
         var results = new List<JdRequestOrder>();
         var page = 1;
@@ -258,7 +264,14 @@ public sealed class JdRepository : IJdRepository
             var qs = $"pageNumber={page}&pageSize={pageSize}";
             var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, $"api/inventories/{inventoryId}/requestorders?{qs}"), cancellationToken);
             if (!response.IsSuccessStatusCode)
-                break;
+            {
+                // Fail loudly. This used to `break` and return the pages read so far: a failed page 3 of 8
+                // silently produced a truncated list, and the sales-order dedup (UpsertRequestOrdersAsync)
+                // treats "not in the list" as "not in JD" and would create a duplicate request order.
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                _logger.LogWarning("JD GET request orders failed on page {Page}: {Status} {Body}", page, (int)response.StatusCode, body);
+                throw new JdLookupFailedException($"requestorders (page {page})", (int)response.StatusCode, body);
+            }
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             var pagePayload = await JsonSerializer.DeserializeAsync<JdPagedResponse<JdRequestOrder>>(stream, cancellationToken: cancellationToken)
                               ?? new JdPagedResponse<JdRequestOrder>();
@@ -266,6 +279,11 @@ public sealed class JdRepository : IJdRepository
                 results.AddRange(pagePayload.items);
             var p = pagePayload.pagination;
             if (p == null || p.pageCount <= 1 || p.currentPage >= p.pageCount)
+                break;
+            // Newest-first listing: once a whole page is older than the cutoff, every later page is too.
+            // An order without createdOn counts as "not older", so a page containing one never ends the read early.
+            if (createdAfter.HasValue && pagePayload.items is { Count: > 0 } items
+                && items.All(o => o.createdOn.HasValue && o.createdOn.Value < createdAfter.Value))
                 break;
             page++;
         }

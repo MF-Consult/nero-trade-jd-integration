@@ -60,6 +60,9 @@ public sealed class UnicontaService(IUnicontaRepository repo, JdSettings jdSetti
             yield return item;
     }
 
+    public Task<IReadOnlyList<LocalInventoryItem>> ReadItemsBySkusAsync(IReadOnlyCollection<string> skus, CancellationToken cancellationToken)
+        => repo.ReadItemsBySkusAsync(skus, cancellationToken);
+
     public async IAsyncEnumerable<LocalPurchaseOrder> ReadPurchaseOrdersBatchedAsync(int batchSize, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var buffer = new List<LocalPurchaseOrder>(batchSize);

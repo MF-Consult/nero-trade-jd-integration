@@ -4,6 +4,12 @@ public sealed class LocalPurchaseOrder
 {
     public int PurchaseNumber { get; init; }
     public DateTime? Date { get; init; }
+
+    /// <summary>
+    /// Uniconta's last-modified time for the order header. A user ticking <c>xTransferToJD</c> bumps it, so it is
+    /// our best proxy for "when the user pressed send" and lets the sync log the real end-to-end delay.
+    /// </summary>
+    public DateTime? UpdatedAt { get; init; }
     public string? SupplierAccount { get; init; }
     public string? OurRef { get; init; }
     public string? YourRef { get; init; }

@@ -116,6 +116,65 @@ public class JdRepositoryTests
         Assert.Equal(1, handler.CallCount); // GET went through
     }
 
+    [Fact]
+    public async Task GetRequestOrdersAsync_LaterPageFails_ThrowsInsteadOfReturningTruncatedList()
+    {
+        // Page 1 says there are 2 pages; page 2 fails. A partial list would make the sales-order dedup
+        // believe an existing order is absent in JD and create a duplicate.
+        var handler = StubHttpMessageHandler.Sequence(
+            (HttpStatusCode.OK, """{"items":[{"id":1}],"pagination":{"currentPage":1,"pageCount":2,"pageSize":200}}"""),
+            (HttpStatusCode.Unauthorized, "{\"error\":\"unauthorized\"}"));
+        var repo = BuildRepo(handler);
+
+        var ex = await Assert.ThrowsAsync<JdLookupFailedException>(
+            () => repo.GetRequestOrdersAsync(16629, CancellationToken.None));
+        Assert.Equal(401, ex.StatusCode);
+        Assert.Contains("page 2", ex.Endpoint);
+    }
+
+    [Fact]
+    public async Task GetRequestOrdersAsync_AllPagesOk_ReturnsEveryItem()
+    {
+        var handler = StubHttpMessageHandler.Sequence(
+            (HttpStatusCode.OK, """{"items":[{"id":1}],"pagination":{"currentPage":1,"pageCount":2,"pageSize":200}}"""),
+            (HttpStatusCode.OK, """{"items":[{"id":2}],"pagination":{"currentPage":2,"pageCount":2,"pageSize":200}}"""));
+        var repo = BuildRepo(handler);
+
+        var result = await repo.GetRequestOrdersAsync(16629, CancellationToken.None);
+
+        Assert.Equal(new long?[] { 1, 2 }, result.Select(o => o.id).ToArray());
+    }
+
+    [Fact]
+    public async Task GetRecentRequestOrdersAsync_StopsPagingOnceAWholePageIsOlderThanTheCutoff()
+    {
+        // Newest first: page 1 is recent, page 2 is entirely older than the cutoff, so page 3 must not be read.
+        var handler = StubHttpMessageHandler.Sequence(
+            (HttpStatusCode.OK, """{"items":[{"id":1,"createdOn":"2026-11-05T10:00:00Z"}],"pagination":{"currentPage":1,"pageCount":3,"pageSize":200}}"""),
+            (HttpStatusCode.OK, """{"items":[{"id":2,"createdOn":"2026-01-01T10:00:00Z"}],"pagination":{"currentPage":2,"pageCount":3,"pageSize":200}}"""),
+            (HttpStatusCode.OK, """{"items":[{"id":3,"createdOn":"2025-01-01T10:00:00Z"}],"pagination":{"currentPage":3,"pageCount":3,"pageSize":200}}"""));
+        var repo = BuildRepo(handler);
+
+        var result = await repo.GetRecentRequestOrdersAsync(16629, new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc), CancellationToken.None);
+
+        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(new long?[] { 1, 2 }, result.Select(o => o.id).ToArray());
+    }
+
+    [Fact]
+    public async Task GetRecentRequestOrdersAsync_OrderWithoutCreatedOn_NeverEndsTheReadEarly()
+    {
+        var handler = StubHttpMessageHandler.Sequence(
+            (HttpStatusCode.OK, """{"items":[{"id":1,"createdOn":"2020-01-01T00:00:00Z"},{"id":9}],"pagination":{"currentPage":1,"pageCount":2,"pageSize":200}}"""),
+            (HttpStatusCode.OK, """{"items":[{"id":2}],"pagination":{"currentPage":2,"pageCount":2,"pageSize":200}}"""));
+        var repo = BuildRepo(handler);
+
+        var result = await repo.GetRecentRequestOrdersAsync(16629, new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc), CancellationToken.None);
+
+        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(3, result.Count);
+    }
+
     private static JdRepository BuildRepo(HttpMessageHandler handler, bool dryRun = false)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://stub.invalid/") };
@@ -127,6 +186,7 @@ public class JdRepositoryTests
     {
         private readonly HttpStatusCode _status;
         private readonly string _body;
+        private Queue<(HttpStatusCode, string)>? _sequence;
 
         public int CallCount { get; private set; }
 
@@ -139,12 +199,17 @@ public class JdRepositoryTests
         public static StubHttpMessageHandler Returning(HttpStatusCode status, string body)
             => new(status, body);
 
+        /// <summary>Answers successive calls from the list; the last entry repeats once it runs out.</summary>
+        public static StubHttpMessageHandler Sequence(params (HttpStatusCode, string)[] responses)
+            => new(responses[^1].Item1, responses[^1].Item2) { _sequence = new Queue<(HttpStatusCode, string)>(responses) };
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             CallCount++;
-            var response = new HttpResponseMessage(_status)
+            var (status, body) = _sequence is { Count: > 1 } ? _sequence.Dequeue() : (_status, _body);
+            var response = new HttpResponseMessage(status)
             {
-                Content = new StringContent(_body, Encoding.UTF8, "application/json")
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
             };
             return Task.FromResult(response);
         }

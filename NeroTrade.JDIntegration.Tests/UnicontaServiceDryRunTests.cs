@@ -61,6 +61,9 @@ public class UnicontaServiceDryRunTests
     {
         public int WriteCallCount { get; private set; }
 
+        public Task<IReadOnlyList<LocalInventoryItem>> ReadItemsBySkusAsync(IReadOnlyCollection<string> skus, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<LocalInventoryItem>>(new List<LocalInventoryItem>());
+
         public Task<bool> UpdateSalesOrderGroupAsync(int orderNumber, string group, CancellationToken cancellationToken)
         { WriteCallCount++; return Task.FromResult(true); }
 

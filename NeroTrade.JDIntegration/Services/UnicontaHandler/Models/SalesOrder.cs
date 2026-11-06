@@ -4,6 +4,10 @@ public sealed class LocalSalesOrder
 {
     public int OrderNumber { get; init; }
     public DateTime? Date { get; init; }
+
+    /// <summary>Uniconta's last-modified time of the order header (UTC). A user ticking <c>xTransferToJD</c> (or re-clicking a
+    /// <c>Fejlet</c> order) bumps it, so it approximates "when the user pressed send" for the end-to-end delay row.</summary>
+    public DateTime? UpdatedAt { get; init; }
     public string? DebtorAccount { get; init; }
     public string? DebtorName { get; init; }
     public string? DebtorCVR { get; init; }

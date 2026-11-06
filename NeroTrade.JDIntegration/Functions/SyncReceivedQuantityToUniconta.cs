@@ -1,7 +1,9 @@
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
+using NeroTrade.JDIntegration.Models.Settings;
 using NeroTrade.JDIntegration.Services.ExternalIntegration;
+using NeroTrade.JDIntegration.Services.JdWebhook;
 using NeroTrade.JDIntegration.Services.Logging;
 using NeroTrade.JDIntegration.Services.Scheduling;
 using NeroTrade.JDIntegration.Services.UnicontaHandler;
@@ -13,6 +15,7 @@ namespace NeroTrade.JDIntegration.Functions;
 public sealed class SyncReceivedQuantityToUniconta(
     IJdLogisticsService jd,
     IUnicontaService uniconta,
+    JdWebhookOptions webhookOptions,
     SyncScheduler scheduler,
     IIntegrationLogger integrationLogger,
     ILogger<SyncReceivedQuantityToUniconta> logger)
@@ -47,6 +50,7 @@ public sealed class SyncReceivedQuantityToUniconta(
                 allShipments.Count, relevantShipments.Count, cutoffTime);
 
             int updatedCount = 0;
+            var updatedPurchaseNumbers = new List<int>();
             int errorCount = 0;
             int skippedCount = 0;
 
@@ -160,6 +164,7 @@ public sealed class SyncReceivedQuantityToUniconta(
                 if (poUpdated)
                 {
                     updatedCount++;
+                    updatedPurchaseNumbers.Add(purchaseNumber);
                     await integrationLogger.LogAsync(new IntegrationLogEntry(
                         integrationLogger.IntegrationName, "info", "Integration", purchaseNumber.ToString(),
                         $"Received quantities for PO {purchaseNumber} registered from JD.", null, null)
@@ -176,6 +181,21 @@ public sealed class SyncReceivedQuantityToUniconta(
 
             logger.LogInformation("Sync Completed. Processed POs: {Updated}, Line Errors: {Errors}, Skipped Shipments: {Skipped}",
                 updatedCount, errorCount, skippedCount);
+
+            // Same webhook-vs-poll check as the status sync: quantities registered by a poll that no JD webhook announced.
+            if (WebhookReconciliation.IsMissed(!string.IsNullOrEmpty(webhookOptions.Secret), scheduler.LastWebhookUtc("ReceivedQuantity"), DateTime.UtcNow, updatedCount))
+            {
+                await integrationLogger.LogAsync(new IntegrationLogEntry(
+                    integrationLogger.IntegrationName, "warning", "JD", null,
+                    $"Poll registered received quantities for {updatedCount} PO(s) that no JD webhook announced (POs: {string.Join(", ", updatedPurchaseNumbers)}).", null,
+                    JsonSerializer.SerializeToElement(new { purchaseOrders = updatedPurchaseNumbers, lastWebhookUtc = scheduler.LastWebhookUtc("ReceivedQuantity") }))
+                {
+                    CorrelationId = logScope.CorrelationId,
+                    ErrorCode = "JD_WEBHOOK_MISSED",
+                    Retryable = false,
+                    SuggestedAction = "Check GET /api/webhooks at JD (registered, correct URL?), JdWebhook__Secret in the Function App, and 'JD webhook … received' rows; polling still delivered the data."
+                }, token);
+            }
 
             if (relevantShipments.Count > 0)
             {
