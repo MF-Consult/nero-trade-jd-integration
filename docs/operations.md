@@ -200,7 +200,7 @@ Defaults (see `Models/Settings/SyncSchedulingOptions.cs`) — day window **07–
 | Job (config key) | Day | Night |
 |---|---|---|
 | `SalesOrders` | 60 s | 5 min |
-| `PurchaseOrders` | 72 s | 30 min |
+| `PurchaseOrders` | 72 s | 172 s (was 30 min until 2026-11-06) |
 | `PostedPurchaseInvoices` | 72 s | 30 min |
 | `RequestOrderStatus` | ~10 min | 30 min |
 | `Items` | ~10 min | 60 min |
@@ -245,6 +245,37 @@ Config keys (App Settings use `SyncScheduling__…`): `TimeZoneId` (default `Rom
   six sessions, none of which lived long enough to be reused — measured 2026-07-28 as ~56% of the daily
   call volume, with cost per run following `1 + 2/ceil(sessionAge / interval)` (1.67 calls at 60 s, 2.00 at
   90 s, 3.00 at 10 min). Merging to one timer shares one session across all jobs.
+
+### 4.6 Switches added 2026-11-06 (all off/inert until configured)
+
+**Why:** customer report "very long delay Uniconta → JD" (PO 98). Findings: PO 98 was not delayed, it was
+rejected twice (`No matching JD catalog item for SKU(s): DKABNPSCUP200WH`: the item was never flagged
+`XoverforVare` in Uniconta, so it never reached JD's catalog). The only *real* delay was the night cadence (a PO
+sent after 22:00 local waited up to 30 min) — now 172 s, see §4.5. The success row of every PO now carries
+`flaggedAtUtc` / `sentAtUtc` / `delaySeconds` (from the Uniconta header `UpdatedAt`), so end-to-end delay is
+queryable: `select payload from integration_logs where message like 'Purchase order % synced to JD.'`.
+
+| Setting (App Settings) | Default | What it does |
+|---|---|---|
+| `PurchaseOrderSync__AutoCreateMissingItems` | `false` | PO has SKUs not in JD's catalog → read them from the Uniconta item master (ignoring `XoverforVare`), create them in JD with the normal `ItemMapper`, then send the PO. Unknown-in-Uniconta SKUs log `UNICONTA_LOOKUP_MISS`; JD refusing the item logs `JD_VALIDATION_REJECTED` and the PO is rejected as before. Turn on only once the customer has agreed. |
+| `JdWebhook__Secret` | empty (endpoint closed) | Secret JD returns when the webhook is created. Enables `POST /api/jd/webhook`. |
+| `CustomerAlerts__Enabled`, `__ResendApiKey`, `__From`, `__To`, `__DedupHours` | `false` | Plain-Danish error mails via Resend for customer-actionable rows (`JD_VALIDATION_REJECTED`, `UNICONTA_LOOKUP_MISS`), once per problem per 24 h. All of Enabled/ResendApiKey/From/To must be set. Best-effort: a failed mail never affects a sync. `From` must be on a domain verified in Resend. |
+
+**JD webhook (JD → Uniconta).** JD pushes events (`GET /api/statics/enums` → `EWebhook`: 0–3 RequestOrder
+Approved/Denied/PendingDispatch/Dispatched, 10 Inventory_Updated, 20–22 Catalog_*, 30–32 IncomingShipment
+Approved/Denied/Completed). `Functions/JdWebhookReceiver.cs` verifies `X-JD-Hash` (HMAC-SHA256 of `X-JD-Job-Id`
+with the secret; hex or base64) and calls `SyncScheduler.RequestRunNow(...)` for `RequestOrderStatus` (types 0–3)
+or `ReceivedQuantity` (30–32) so that job runs on the next dispatcher tick (≤30 s, at most once per 60 s).
+It does no work itself: the polling job stays the single code path *and* the reconciliation if JD misses an
+event. Register once (JD API, `Authorization: Bearer <key>`):
+
+```http
+POST https://api.jdlogistik.dk/api/webhooks
+{ "types": [0,1,2,3,30,31,32], "urlAddress": "https://nero-trade-data-syncer.azurewebsites.net/api/jd/webhook" }
+```
+→ put the returned `secret` in `JdWebhook__Secret`. Only after events are seen arriving (look for the
+`JD webhook … accepted` log lines) slow `RequestOrderStatus` / `ReceivedQuantity` in `SyncScheduling`; the
+calls saved fund a faster Uniconta→JD cadence. JD source IPs (per its docs): 13.74.38.39, 13.79.81.45.
 
 ---
 

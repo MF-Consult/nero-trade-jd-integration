@@ -104,7 +104,7 @@ CI/CD via GitHub Actions (`.github/workflows/master_nero-trade-data-syncer.yml`)
 - Sales-order eligibility: `xTransferToJD` = true, `Group` empty/`Fejlet`, and `UpdatedAt` within the
   last **1 day** (`SalesOrderRecentWindow`). Purchase orders have no time window (all scanned).
 - Nullable reference types are enabled — null-check Uniconta query results carefully
-- All sync jobs run under the single `SyncDispatcher` timer; `TestGeneratePdf`, `SyncDebtorsToJd`, the `inspect/*` and `remediation/*` endpoints are HTTP
+- All sync jobs run under the single `SyncDispatcher` timer; `TestGeneratePdf`, `SyncDebtorsToJd`, `JdWebhookReceiver` (`POST /api/jd/webhook`, HMAC-authenticated, only nudges `SyncScheduler.RequestRunNow`), the `inspect/*` and `remediation/*` endpoints are HTTP
 - **There is exactly one timer in the app: `SyncDispatcher`** (`*/30`). It calls the six sync jobs in
   sequence; each one self-gates via `SyncScheduler`. The jobs are plain classes registered in `Program.cs`
   — they have no `[Function]`/`[TimerTrigger]` of their own, and must not get one back: the Functions scale
