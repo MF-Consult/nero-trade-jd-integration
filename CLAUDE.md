@@ -157,6 +157,7 @@ Quick rules for in-session edits:
 - `SYNC_RUN_FAILED` — top-level catch in a sync function; almost always retryable
 - `JD_TIMEOUT`, `JD_AUTH_FAILED`, `JD_RATE_LIMITED`, `JD_5XX` — transport-level JD failures
 - `JD_VALIDATION_REJECTED` — JD accepted the request but rejected the payload (not retryable; needs data fix)
+- `JD_WEBHOOK_MISSED` — a scheduled poll found JD→Uniconta changes (status / received quantity) while a webhook secret is configured and no JD webhook arrived in the 10 min before. Warning, not retryable; means the webhook is unregistered, mis-addressed or its secret is wrong — the poll still delivered the change.
 - `JD_LOOKUP_MISS` — JD returned 404 for a record we expected
 - `JD_CONTAINER_TYPE_UNMAPPED` — a line's unit matched no JD container type; the line shipped as `Stk`. Not retryable — either add the translation in `UnitTranslator` or add the type in JD.
 - `UNICONTA_TIMEOUT` — a Uniconta SDK call did not answer within `UnicontaConfig.TimeoutSeconds`. **Warning**, retryable; the session is invalidated and the next tick reconnects.

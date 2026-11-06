@@ -334,6 +334,7 @@ public class UnicontaRepository(
         {
             OrderNumber = o.OrderNumber,
             Date = o._Created,
+            UpdatedAt = o.UpdatedAt == default ? (DateTime?)null : o.UpdatedAt,
             DebtorAccount = o.Account,
             Comments = o._Remark,
             DeliveryName = o._DeliveryName ?? debtor?._Name,

@@ -276,6 +276,12 @@ POST https://api.jdlogistik.dk/api/webhooks
 → put the returned `secret` in `JdWebhook__Secret`. Only after events are seen arriving (look for the
 `JD webhook … accepted` log lines) slow `RequestOrderStatus` / `ReceivedQuantity` in `SyncScheduling`; the
 calls saved fund a faster Uniconta→JD cadence. JD source IPs (per its docs): 13.74.38.39, 13.79.81.45.
+**Webhook vs. poll check.** When `JdWebhook__Secret` is set and a *scheduled* `RequestOrderStatus` / `ReceivedQuantity` poll updates Uniconta although no webhook for that job arrived in the previous 10 minutes, the run writes a `JD_WEBHOOK_MISSED` warning listing the orders/POs. A broken webhook is then noticed instead of just showing up as a slower sync. Expect a few of these between setting the secret and registering the webhook at JD.
+
+**Request-order read window** (`RequestOrderSync`, defaults 30 days / 24 h). The status sync used to read all ~1.470 JD request orders every run (8 calls, ~7 s). Regular runs now stop paging at the first page that is entirely older than `RequestOrderSync__RecentWindowDays`; one run per `RequestOrderSync__FullSweepHours` reads everything. Worst case an old order (>30 days) that changes status is reflected in Uniconta ≤24 h later. Set `RecentWindowDays=0` to always read everything. The run row's payload shows `jdOrdersRead` and `fullSweep`.
+
+**Health endpoint.** `GET /api/inspect/health` (function key) returns per-job last start, cadence, `stale` (no start for >2.5× the cadence + 1 min) and last webhook time; in-memory, no Uniconta/JD calls. It cannot detect a dead process on its own, so poll it from Hermes and also alert on the SQL staleness query (ops-queries.md §1). After a restart `lastStartUtc` is null until a job has run once — treat that as unknown.
+
 Each accepted event also writes an info row (`JD webhook <type> received…`) to `integration_logs`, so delivery can be measured; ready-made queries for this and other health checks are in [ops-queries.md](ops-queries.md).
 
 ---

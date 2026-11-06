@@ -56,6 +56,7 @@ public sealed class JdWebhookReceiver(
 
             if (job != null)
             {
+                scheduler.RecordWebhook(job, DateTime.UtcNow);
                 scheduler.RequestRunNow(job);
                 logger.LogInformation("JD webhook {Name} ({Type}) accepted, job {Job} will run on the next tick (jobId={JobId})", name, type, job, jobId);
             }

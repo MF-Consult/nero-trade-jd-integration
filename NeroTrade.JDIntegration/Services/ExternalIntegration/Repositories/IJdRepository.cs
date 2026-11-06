@@ -25,6 +25,13 @@ public interface IJdRepository
 
     // Request orders
     Task<IReadOnlyList<JdRequestOrder>> GetRequestOrdersAsync(long inventoryId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Request orders created on/after roughly <paramref name="createdAfter"/>. JD lists newest first, so paging stops at
+    /// the first page whose every order is older than the cutoff; the returned list can include some older orders from
+    /// that last page. Used by the status sync to avoid re-reading the whole history every run.
+    /// </summary>
+    Task<IReadOnlyList<JdRequestOrder>> GetRecentRequestOrdersAsync(long inventoryId, DateTime createdAfter, CancellationToken cancellationToken);
     Task<(bool ok, int status, string message, JdRequestOrder? returned)> CreateRequestOrderAsync(long inventoryId, JdRequestOrderCreate payload, CancellationToken cancellationToken);
     Task<(bool ok, int status, string message)> DeleteRequestOrderAsync(long inventoryId, long requestOrderId, CancellationToken cancellationToken);
 

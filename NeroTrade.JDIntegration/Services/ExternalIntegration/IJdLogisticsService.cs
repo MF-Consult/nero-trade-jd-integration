@@ -15,6 +15,7 @@ public interface IJdLogisticsService
 
     Task<IReadOnlyList<JdInventory>> GetInventoriesAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<JdRequestOrder>> GetRequestOrdersAsync(long inventoryId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<JdRequestOrder>> GetRecentRequestOrdersAsync(long inventoryId, DateTime createdAfter, CancellationToken cancellationToken);
     Task<UpsertResult<JdRequestOrderCreate>> UpsertRequestOrdersAsync(long inventoryId, IEnumerable<JdRequestOrderCreate> orders, CancellationToken cancellationToken);
     Task<(bool ok, int status, string message)> DeleteRequestOrderAsync(long inventoryId, long requestOrderId, CancellationToken cancellationToken);
 

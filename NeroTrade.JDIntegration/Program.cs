@@ -35,6 +35,10 @@ builder.Services.Configure<SyncSchedulingOptions>(builder.Configuration.GetSecti
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<SyncSchedulingOptions>>().Value);
 builder.Services.AddSingleton<SyncScheduler>();
 
+// How much of JD's request-order history the status sync reads per run (recent window + daily full sweep).
+builder.Services.Configure<RequestOrderSyncOptions>(builder.Configuration.GetSection(RequestOrderSyncOptions.SectionName));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<RequestOrderSyncOptions>>().Value);
+
 // Inbound JD webhook (JD -> Uniconta status/quantity nudges). Secret empty = endpoint rejects everything.
 builder.Services.Configure<JdWebhookOptions>(builder.Configuration.GetSection(JdWebhookOptions.SectionName));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<JdWebhookOptions>>().Value);

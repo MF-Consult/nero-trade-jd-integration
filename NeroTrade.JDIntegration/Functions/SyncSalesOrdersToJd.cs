@@ -76,6 +76,7 @@ public sealed class SyncSalesOrdersToJd(
 
             // Build RequestOrder from Sales Orders (DebtorOrderClient) per user's mapping
             var batch = new List<JdRequestOrderCreate>(capacity: 200);
+            var flaggedAt = new Dictionary<int, DateTime>(); // order number -> Uniconta UpdatedAt, for the flag->sent delay row
 
             // Existing Uniconta delivery notes are not yet wired up (see UnicontaRepository.ReadDebtorDeliveryNotesAsync).
             // TODO: Populate this once ReadDebtorDeliveryNotesAsync is implemented.
@@ -97,6 +98,7 @@ public sealed class SyncSalesOrdersToJd(
                 if (!hasNext) break;
 
                 var so = unicontaEnumerator.Current;
+                if (so.UpdatedAt.HasValue) flaggedAt[so.OrderNumber] = so.UpdatedAt.Value;
                 timings.OrdersRead++;
 
                 // Generate and upload PDF delivery note for this order
@@ -111,14 +113,14 @@ public sealed class SyncSalesOrdersToJd(
                 batch.Add(mapper.Map(so, allFiles));
                 if (batch.Count >= 200)
                 {
-                    var (p, s, f) = await HandleBatchAsync(inventory.id.Value, batch, logScope, timings, cancellationToken);
+                    var (p, s, f) = await HandleBatchAsync(inventory.id.Value, batch, flaggedAt, logScope, timings, cancellationToken);
                     totalProcessed += p; totalSucceeded += s; totalFailed += f;
                     batch.Clear();
                 }
             }
             if (batch.Count > 0)
             {
-                var (p, s, f) = await HandleBatchAsync(inventory.id.Value, batch, logScope, timings, cancellationToken);
+                var (p, s, f) = await HandleBatchAsync(inventory.id.Value, batch, flaggedAt, logScope, timings, cancellationToken);
                 totalProcessed += p; totalSucceeded += s; totalFailed += f;
                 batch.Clear();
             }
@@ -193,7 +195,7 @@ public sealed class SyncSalesOrdersToJd(
         }
     }
 
-    private async Task<(int processed, int succeeded, int failed)> HandleBatchAsync(long inventoryId, List<JdRequestOrderCreate> batch, IntegrationLogScope logScope, RunTimings timings, CancellationToken ct)
+    private async Task<(int processed, int succeeded, int failed)> HandleBatchAsync(long inventoryId, List<JdRequestOrderCreate> batch, IReadOnlyDictionary<int, DateTime> flaggedAt, IntegrationLogScope logScope, RunTimings timings, CancellationToken ct)
     {
         var upsertSw = Stopwatch.StartNew();
         var result = await jd.UpsertRequestOrdersAsync(inventoryId, batch, ct);
@@ -230,7 +232,8 @@ public sealed class SyncSalesOrdersToJd(
                 markedCreated++;
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
                     integrationLogger.IntegrationName, "info", "Integration", order.SourceOrderNumber.Value.ToString(),
-                    $"Sales order {order.SourceOrderNumber} synced to JD.", null, null)
+                    $"Sales order {order.SourceOrderNumber} synced to JD.", null,
+                    SyncPurchaseOrdersToJd.DelayPayload(flaggedAt, order.SourceOrderNumber.Value))
                 {
                     CorrelationId = logScope.CorrelationId
                 }, ct);

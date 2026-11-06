@@ -97,3 +97,54 @@ from integration_logs
 where integration_name='NeroTrade.JDIntegration' and message like '%auto-created in JD%'
 order by created_at desc limit 50;
 ```
+
+## 8. Webhook missed by the poll (`JD_WEBHOOK_MISSED`)
+
+```sql
+select created_at, message, payload
+from integration_logs
+where integration_name='NeroTrade.JDIntegration' and error_code='JD_WEBHOOK_MISSED'
+order by created_at desc limit 50;
+```
+
+## 9. Sales-order delay, flag → sent (since 2026-11-06)
+
+Same shape as query 3, for sales orders. Includes re-clicked `Fejlet` orders (their `UpdatedAt` restarts the clock).
+
+```sql
+select date_trunc('day', created_at) d, count(*) orders,
+       round(percentile_cont(0.5)  within group (order by (payload->>'delaySeconds')::int)) p50_s,
+       round(percentile_cont(0.95) within group (order by (payload->>'delaySeconds')::int)) p95_s,
+       max((payload->>'delaySeconds')::int) max_s
+from integration_logs
+where integration_name='NeroTrade.JDIntegration'
+  and message like 'Sales order % synced to JD.' and payload ? 'delaySeconds'
+group by 1 order by 1 desc;
+```
+
+## 10. Daily digest (last 24 h) — for the Hermes morning summary
+
+```sql
+select
+  (select count(*) from integration_logs where integration_name='NeroTrade.JDIntegration' and level='error'   and created_at > now()-interval '24 hours') errors,
+  (select count(*) from integration_logs where integration_name='NeroTrade.JDIntegration' and level='warning' and created_at > now()-interval '24 hours') warnings,
+  (select count(*) from integration_logs where integration_name='NeroTrade.JDIntegration' and message like 'Sales order % synced to JD.'    and created_at > now()-interval '24 hours') sales_orders_sent,
+  (select count(*) from integration_logs where integration_name='NeroTrade.JDIntegration' and message like 'Purchase order % synced to JD.' and created_at > now()-interval '24 hours') purchase_orders_sent,
+  (select count(*) from integration_logs where integration_name='NeroTrade.JDIntegration' and message like 'JD webhook % received%'       and created_at > now()-interval '24 hours') webhooks_received,
+  (select count(*) from integration_logs where integration_name='NeroTrade.JDIntegration' and error_code='JD_WEBHOOK_MISSED'               and created_at > now()-interval '24 hours') webhooks_missed;
+```
+
+## 11. Orders that keep failing (stuck)
+
+An order with an unresolved error for more than 2 hours. Uses the same rows the dashboard shows.
+
+```sql
+select external_id, error_code, count(*) attempts, min(created_at) first_seen, max(created_at) last_seen,
+       (array_agg(message order by created_at desc))[1] last_message
+from integration_logs
+where integration_name='NeroTrade.JDIntegration' and level='error' and external_id is not null
+  and created_at > now() - interval '3 days'
+group by 1,2
+having min(created_at) < now() - interval '2 hours' and max(created_at) > now() - interval '30 minutes'
+order by attempts desc;
+```

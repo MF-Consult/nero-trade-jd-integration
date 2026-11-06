@@ -275,6 +275,9 @@ public sealed class JdLogisticsService(
     public Task<IReadOnlyList<JdRequestOrder>> GetRequestOrdersAsync(long inventoryId, CancellationToken cancellationToken)
         => repository.GetRequestOrdersAsync(inventoryId, cancellationToken);
 
+    public Task<IReadOnlyList<JdRequestOrder>> GetRecentRequestOrdersAsync(long inventoryId, DateTime createdAfter, CancellationToken cancellationToken)
+        => repository.GetRecentRequestOrdersAsync(inventoryId, createdAfter, cancellationToken);
+
     public Task<(bool ok, int status, string message)> DeleteRequestOrderAsync(long inventoryId, long requestOrderId, CancellationToken cancellationToken)
         => repository.DeleteRequestOrderAsync(inventoryId, requestOrderId, cancellationToken);
 

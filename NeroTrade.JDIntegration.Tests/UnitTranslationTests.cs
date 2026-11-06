@@ -173,6 +173,7 @@ public class UnitTranslationTests
         public Task<(bool ok, int status, string message, JdIncomingShipment? returned)> GetIncomingShipmentByIdAsync(long id, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<JdInventory>> GetInventoriesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<JdRequestOrder>> GetRequestOrdersAsync(long inventoryId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<JdRequestOrder>> GetRecentRequestOrdersAsync(long inventoryId, DateTime createdAfter, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<(bool ok, int status, string message, JdRequestOrder? returned)> CreateRequestOrderAsync(long inventoryId, JdRequestOrderCreate payload, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<(bool ok, int status, string message)> DeleteRequestOrderAsync(long inventoryId, long requestOrderId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<(bool ok, int status, string message, JdFileResponse? returned)> CreateFileAsync(JdFileCreate file, CancellationToken cancellationToken) => throw new NotSupportedException();
