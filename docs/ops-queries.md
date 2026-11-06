@@ -122,7 +122,9 @@ where integration_name='NeroTrade.JDIntegration'
 group by 1 order by 1 desc;
 ```
 
-## 10. Daily digest (last 24 h) — for the Hermes morning summary
+## 10. Daily digest (last 24 h)
+
+The 08:00 n8n report (`fn_status_digest`) already contains these numbers; this is the raw query for ad-hoc use.
 
 ```sql
 select
