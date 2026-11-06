@@ -33,21 +33,23 @@ public sealed class SyncPurchaseOrdersToJd(
         try
         {
             var batch = new List<JdIncomingShipmentCreate>(capacity: 200);
+            var flaggedAt = new Dictionary<int, DateTime>();
             int totalProcessed = 0, totalSucceeded = 0, totalFailed = 0;
             await foreach (var po in uniconta.ReadPurchaseOrdersBatchedAsync(200, cancellationToken))
             {
                 var payload = mapper.Map(po);
+                if (po.UpdatedAt.HasValue) flaggedAt[po.PurchaseNumber] = po.UpdatedAt.Value;
                 batch.Add(payload);
                 if (batch.Count >= 200)
                 {
-                    var (p, s, f) = await HandleBatchAsync(batch, logScope, cancellationToken);
+                    var (p, s, f) = await HandleBatchAsync(batch, flaggedAt, logScope, cancellationToken);
                     totalProcessed += p; totalSucceeded += s; totalFailed += f;
                     batch.Clear();
                 }
             }
             if (batch.Count > 0)
             {
-                var (p, s, f) = await HandleBatchAsync(batch, logScope, cancellationToken);
+                var (p, s, f) = await HandleBatchAsync(batch, flaggedAt, logScope, cancellationToken);
                 totalProcessed += p; totalSucceeded += s; totalFailed += f;
                 batch.Clear();
             }
@@ -76,7 +78,25 @@ public sealed class SyncPurchaseOrdersToJd(
         }
     }
 
-    private async Task<(int processed, int succeeded, int failed)> HandleBatchAsync(List<JdIncomingShipmentCreate> batch, IntegrationLogScope logScope, CancellationToken ct)
+    /// <summary>
+    /// End-to-end delay for a purchase order: Uniconta's last-modified time on the header (a user ticking
+    /// <c>xTransferToJD</c> bumps it) to now. Logged on the success row so "it took too long" can be
+    /// answered from <c>integration_logs</c> instead of guessed. Null when Uniconta gave no timestamp.
+    /// </summary>
+    internal static JsonElement? DelayPayload(IReadOnlyDictionary<int, DateTime> flaggedAt, int purchaseNumber, DateTime? nowUtc = null)
+    {
+        if (!flaggedAt.TryGetValue(purchaseNumber, out var flagged)) return null;
+        var now = nowUtc ?? DateTime.UtcNow;
+        var flaggedUtc = DateTime.SpecifyKind(flagged, DateTimeKind.Utc);
+        return JsonSerializer.SerializeToElement(new
+        {
+            flaggedAtUtc = flaggedUtc,
+            sentAtUtc = now,
+            delaySeconds = (int)Math.Max(0, (now - flaggedUtc).TotalSeconds)
+        });
+    }
+
+    private async Task<(int processed, int succeeded, int failed)> HandleBatchAsync(List<JdIncomingShipmentCreate> batch, IReadOnlyDictionary<int, DateTime> flaggedAt, IntegrationLogScope logScope, CancellationToken ct)
     {
         var result = await jd.CreateIncomingShipmentsAsync(batch, ct);
         if (result.Failures.Count > 0)
@@ -100,7 +120,8 @@ public sealed class SyncPurchaseOrdersToJd(
                 markedCreated++;
                 await integrationLogger.LogAsync(new IntegrationLogEntry(
                     integrationLogger.IntegrationName, "info", "Integration", item.SourcePurchaseNumber.Value.ToString(),
-                    $"Purchase order {item.SourcePurchaseNumber} synced to JD.", null, null)
+                    $"Purchase order {item.SourcePurchaseNumber} synced to JD.", null,
+                    DelayPayload(flaggedAt, item.SourcePurchaseNumber.Value))
                 {
                     CorrelationId = logScope.CorrelationId
                 }, ct);

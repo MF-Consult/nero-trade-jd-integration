@@ -56,4 +56,13 @@ public class SchedulerCadenceTests
                 $"{job}: DaySeconds={cadence.DaySeconds} lands exactly on a 30 s tick boundary and will slip a tick");
         }
     }
+
+    [Fact]
+    public void PurchaseOrders_NightCadence_IsNoSlowerThanThreeMinutes()
+    {
+        // Regression: night was 1800 s, so a purchase order sent after 22:00 local waited up to 30 min.
+        var cadence = new SyncSchedulingOptions().Jobs["PurchaseOrders"];
+        Assert.True(cadence.NightSeconds <= 180, $"PurchaseOrders night cadence is {cadence.NightSeconds} s");
+        Assert.True(cadence.NightSeconds % 30 is > 0 and <= 29, "night cadence must also sit just below a 30 s tick boundary");
+    }
 }

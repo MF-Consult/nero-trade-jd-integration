@@ -150,6 +150,7 @@ public class UnicontaRepository(
         {
             PurchaseNumber = o.OrderNumber,
             Date = o._Created,
+            UpdatedAt = o.UpdatedAt == default ? (DateTime?)null : o.UpdatedAt,
             SupplierAccount = o.Account,
             OurRef = o._OurRef,
             YourRef = o._YourRef,
