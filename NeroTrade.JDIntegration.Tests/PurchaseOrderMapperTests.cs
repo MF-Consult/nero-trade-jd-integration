@@ -16,7 +16,7 @@ public class PurchaseOrderMapperTests
     [Fact]
     public void Map_UsesCarrierDeliveryDateAndRemark_WhenPopulated()
     {
-        var deliveryDate = new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc);
+        var deliveryDate = DateTime.UtcNow.Date.AddDays(30); // future: past dates are moved up to now
         var po = new LocalPurchaseOrder
         {
             PurchaseNumber = 2200,
@@ -166,5 +166,26 @@ public class PurchaseOrderMapperTests
         var line = Assert.Single(create.lines);
         Assert.False(line.isSubItem!.Value);
         Assert.Equal("A", line.Sku);
+    }
+
+    [Fact]
+    public void Map_MovesPastDeliveryDate_UpToNow()
+    {
+        var po = new LocalPurchaseOrder { PurchaseNumber = 98, DeliveryDate = DateTime.UtcNow.AddDays(-3) };
+        po.Lines.Add(new LocalPurchaseOrderLine { Sku = "A", Quantity = 1, Unit = "Stk" });
+
+        var create = new PurchaseOrderMapper().Map(po);
+
+        Assert.True(create.date!.Value >= DateTime.UtcNow.Date);
+    }
+
+    [Fact]
+    public void Map_KeepsFutureDeliveryDate()
+    {
+        var future = DateTime.UtcNow.Date.AddDays(5);
+        var po = new LocalPurchaseOrder { PurchaseNumber = 98, DeliveryDate = future };
+        po.Lines.Add(new LocalPurchaseOrderLine { Sku = "A", Quantity = 1, Unit = "Stk" });
+
+        Assert.Equal(future, new PurchaseOrderMapper().Map(po).date!.Value);
     }
 }
