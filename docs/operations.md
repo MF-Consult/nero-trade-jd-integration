@@ -486,6 +486,19 @@ X-Remediation-Secret: <shared-secret>
 { "action": "override-order-status", "orderNumber": 2135, "group": "Godkendt", "applied": true }
 ```
 
+### 7.3b `POST /remediation/test-customer-alert?to=<address>`
+
+Sends one sample customer error mail (PO 98, missing catalog item, subject prefixed `[TEST]`) through the live
+Resend setup to `to` only, never to `CustomerAlerts__To`. Touches neither Uniconta nor JD. Function key only (no
+`X-Remediation-Secret`: it changes no data). `409` when customer alerts are not fully configured, `502` when Resend
+refuses (bad key or unverified sender), `200` means production mails will go out too. Lives in
+`CustomerAlertTestEndpoint.cs`.
+
+```http
+POST https://<host>/api/remediation/test-customer-alert?to=mark@mfconsult.dk
+x-functions-key: <function-key>
+```
+
 ### 7.4 Adding new endpoints
 
 Reuse an existing `IUnicontaService` / `IJdLogisticsService` method — **never invent new business logic** in `RemediationEndpoints.cs`. The pattern is:
