@@ -59,7 +59,11 @@ public sealed class SyncSchedulingOptions
         // averaging 75 s. Keep every interval just below its intended multiple of 30 (hence 72 for the
         // purchase jobs, giving a reliable 90 s).
         ["SalesOrders"] = new JobCadence { DaySeconds = 50, NightSeconds = 300 },
-        ["PurchaseOrders"] = new JobCadence { DaySeconds = 72, NightSeconds = 1800 },
+        // Night 1800 -> 172 on 2026-11-06 (effective ~180 s). Customer report: purchase order 98 was flagged
+        // 22:29 local and a user pressing send after 22:00 waited up to 30 min for the night cadence, which
+        // reads as "a very long delay". Costs roughly 160 extra Uniconta calls/day (one read per run, on a
+        // session that is already shared by the other jobs).
+        ["PurchaseOrders"] = new JobCadence { DaySeconds = 72, NightSeconds = 172 },
         // Same day cadence as PurchaseOrders on purpose: a booked-before-flagged purchase order is caught
         // only by this safety-net, so it should not wait five times longer than the normal path. With the
         // 30 s heartbeat both land on an effective ~90 s. Costs ~434 extra Uniconta calls/day (one read per

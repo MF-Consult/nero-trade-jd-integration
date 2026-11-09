@@ -161,6 +161,27 @@ public sealed class JdLogisticsService(
         => status is >= 400 and < 500
            && message?.Contains("already exist", StringComparison.OrdinalIgnoreCase) == true;
 
+    /// <summary>
+    /// SKUs on product lines that JD's catalog does not know. Read-only: loads the (cached) catalog and
+    /// reports the gap, so the purchase-order sync can decide whether to create the missing items first.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> FindMissingCatalogSkusAsync(IEnumerable<JdIncomingShipmentCreate> shipments, CancellationToken cancellationToken)
+    {
+        _existingItemsBySku = await cache.GetItemsBySkuAsync(
+            () => LoadWithFailureLoggingAsync("catalog", () => repository.GetCatalogItemsAsync(cancellationToken), cancellationToken),
+            cancellationToken);
+
+        var missing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in shipments.SelectMany(s => s.lines))
+        {
+            var sku = line.Sku?.Trim();
+            if (string.IsNullOrWhiteSpace(sku)) continue; // pure container parent line, no catalog item
+            if (_existingItemsBySku.TryGetValue(sku, out var item) && item.id.HasValue) continue;
+            missing.TryAdd(sku, sku);
+        }
+        return missing.Values.ToList();
+    }
+
     // Incoming shipments (purchase orders)
     public async Task<CreateResult<JdIncomingShipmentCreate>> CreateIncomingShipmentsAsync(IEnumerable<JdIncomingShipmentCreate> shipments, CancellationToken cancellationToken)
     {
@@ -253,6 +274,9 @@ public sealed class JdLogisticsService(
 
     public Task<IReadOnlyList<JdRequestOrder>> GetRequestOrdersAsync(long inventoryId, CancellationToken cancellationToken)
         => repository.GetRequestOrdersAsync(inventoryId, cancellationToken);
+
+    public Task<IReadOnlyList<JdRequestOrder>> GetRecentRequestOrdersAsync(long inventoryId, DateTime createdAfter, CancellationToken cancellationToken)
+        => repository.GetRecentRequestOrdersAsync(inventoryId, createdAfter, cancellationToken);
 
     public Task<(bool ok, int status, string message)> DeleteRequestOrderAsync(long inventoryId, long requestOrderId, CancellationToken cancellationToken)
         => repository.DeleteRequestOrderAsync(inventoryId, requestOrderId, cancellationToken);

@@ -104,7 +104,7 @@ CI/CD via GitHub Actions (`.github/workflows/master_nero-trade-data-syncer.yml`)
 - Sales-order eligibility: `xTransferToJD` = true, `Group` empty/`Fejlet`, and `UpdatedAt` within the
   last **1 day** (`SalesOrderRecentWindow`). Purchase orders have no time window (all scanned).
 - Nullable reference types are enabled — null-check Uniconta query results carefully
-- All sync jobs run under the single `SyncDispatcher` timer; `TestGeneratePdf`, `SyncDebtorsToJd`, the `inspect/*` and `remediation/*` endpoints are HTTP
+- All sync jobs run under the single `SyncDispatcher` timer; `TestGeneratePdf`, `SyncDebtorsToJd`, `JdWebhookReceiver` (`POST /api/jd/webhook`, HMAC-authenticated, only nudges `SyncScheduler.RequestRunNow`), the `inspect/*` and `remediation/*` endpoints are HTTP
 - **There is exactly one timer in the app: `SyncDispatcher`** (`*/30`). It calls the six sync jobs in
   sequence; each one self-gates via `SyncScheduler`. The jobs are plain classes registered in `Program.cs`
   — they have no `[Function]`/`[TimerTrigger]` of their own, and must not get one back: the Functions scale
@@ -157,6 +157,7 @@ Quick rules for in-session edits:
 - `SYNC_RUN_FAILED` — top-level catch in a sync function; almost always retryable
 - `JD_TIMEOUT`, `JD_AUTH_FAILED`, `JD_RATE_LIMITED`, `JD_5XX` — transport-level JD failures
 - `JD_VALIDATION_REJECTED` — JD accepted the request but rejected the payload (not retryable; needs data fix)
+- `JD_WEBHOOK_MISSED` — a scheduled poll found JD→Uniconta changes (status / received quantity) while a webhook secret is configured and no JD webhook arrived in the 10 min before. Warning, not retryable; means the webhook is unregistered, mis-addressed or its secret is wrong — the poll still delivered the change.
 - `JD_LOOKUP_MISS` — JD returned 404 for a record we expected
 - `JD_CONTAINER_TYPE_UNMAPPED` — a line's unit matched no JD container type; the line shipped as `Stk`. Not retryable — either add the translation in `UnitTranslator` or add the type in JD.
 - `UNICONTA_TIMEOUT` — a Uniconta SDK call did not answer within `UnicontaConfig.TimeoutSeconds`. **Warning**, retryable; the session is invalidated and the next tick reconnects.

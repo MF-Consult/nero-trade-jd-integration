@@ -55,20 +55,38 @@ public class UnicontaRepository(
         foreach (var i in (items ?? Enumerable.Empty<InvItemClient>()).Where(i => i != null && i.GetUserFieldBoolean(UnicontaUserFields.ItemTransferFlag)))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            yield return new LocalInventoryItem
-            {
-                Sku = i.Item,
-                Name = i.Name,
-                Description = i.ItemNames?.FirstOrDefault(n => n.ItemNameGroup == "da")?.Text ?? string.Empty,
-                EnDescription = i.ItemNames?.FirstOrDefault(n => n.ItemNameGroup == "en")?.Text ?? string.Empty,
-                CommodityCode = i.TariffNumber,
-                UnitPrice = (decimal?)i.SalesPrice1,
-                UnitWeightInGrams = (int?)(i.NetWeight * 1000),
-                ProducedInCountryCode = UnicontaCountry.ToIsoCode(i.CountryOfOrigin),
-                Barcodes = []
-            };
+            yield return ProjectItem(i);
         }
     }
+
+    // Item master rows for specific SKUs, regardless of the XoverforVare flag. Used to create a catalog item in
+    // JD on demand when a purchase order needs one the flagged-item sync has not (yet) delivered. One filtered
+    // read of the whole item table (same cost as an item-sync tick); the SKU match is done in memory.
+    public async Task<IReadOnlyList<LocalInventoryItem>> ReadItemsBySkusAsync(IReadOnlyCollection<string> skus, CancellationToken cancellationToken)
+    {
+        if (skus.Count == 0) return [];
+        var wanted = new HashSet<string>(skus.Select(s => s.Trim()), StringComparer.OrdinalIgnoreCase);
+        var queryApi = await connectionManager.CreateQueryApiAsync();
+        var items = await Timed(queryApi.Query<InvItemClient>(MatchAllFilter()), "Query<InvItemClient>");
+        cancellationToken.ThrowIfCancellationRequested();
+        return (items ?? Enumerable.Empty<InvItemClient>())
+            .Where(i => i != null && !string.IsNullOrWhiteSpace(i.Item) && wanted.Contains(i.Item.Trim()))
+            .Select(ProjectItem)
+            .ToList();
+    }
+
+    private static LocalInventoryItem ProjectItem(InvItemClient i) => new()
+    {
+        Sku = i.Item,
+        Name = i.Name,
+        Description = i.ItemNames?.FirstOrDefault(n => n.ItemNameGroup == "da")?.Text ?? string.Empty,
+        EnDescription = i.ItemNames?.FirstOrDefault(n => n.ItemNameGroup == "en")?.Text ?? string.Empty,
+        CommodityCode = i.TariffNumber,
+        UnitPrice = (decimal?)i.SalesPrice1,
+        UnitWeightInGrams = (int?)(i.NetWeight * 1000),
+        ProducedInCountryCode = UnicontaCountry.ToIsoCode(i.CountryOfOrigin),
+        Barcodes = []
+    };
 
     /// <summary>
     /// A filter that matches every row — <c>RowId</c> is Uniconta's internal row id and is always positive.
@@ -150,6 +168,7 @@ public class UnicontaRepository(
         {
             PurchaseNumber = o.OrderNumber,
             Date = o._Created,
+            UpdatedAt = o.UpdatedAt == default ? (DateTime?)null : o.UpdatedAt,
             SupplierAccount = o.Account,
             OurRef = o._OurRef,
             YourRef = o._YourRef,
@@ -315,6 +334,7 @@ public class UnicontaRepository(
         {
             OrderNumber = o.OrderNumber,
             Date = o._Created,
+            UpdatedAt = o.UpdatedAt == default ? (DateTime?)null : o.UpdatedAt,
             DebtorAccount = o.Account,
             Comments = o._Remark,
             DeliveryName = o._DeliveryName ?? debtor?._Name,

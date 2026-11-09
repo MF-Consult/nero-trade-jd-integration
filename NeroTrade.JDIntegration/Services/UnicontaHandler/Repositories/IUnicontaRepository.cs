@@ -6,6 +6,9 @@ public interface IUnicontaRepository
 {
     IAsyncEnumerable<LocalDebtor> ReadAllDebtorsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<LocalInventoryItem> ReadAllItemsAsync(CancellationToken cancellationToken);
+
+    /// <summary>Item master rows for the given SKUs, ignoring the <c>XoverforVare</c> transfer flag.</summary>
+    Task<IReadOnlyList<LocalInventoryItem>> ReadItemsBySkusAsync(IReadOnlyCollection<string> skus, CancellationToken cancellationToken);
     IAsyncEnumerable<LocalPurchaseOrder> ReadAllPurchaseOrdersAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<LocalSalesOrder> ReadAllSalesOrdersAsync(CancellationToken cancellationToken);
     
