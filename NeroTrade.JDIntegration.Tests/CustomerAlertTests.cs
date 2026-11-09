@@ -180,7 +180,7 @@ public class CustomerAlertTests
     {
         public bool Fail { get; set; }
         public List<(string Subject, string Body)> Sent { get; } = new();
-        public Task SendAsync(string subject, string textBody, CancellationToken cancellationToken)
+        public Task SendAsync(string subject, string textBody, CancellationToken cancellationToken, IReadOnlyList<string>? toOverride = null)
         {
             if (Fail) throw new HttpRequestException("resend down");
             Sent.Add((subject, textBody));
