@@ -16,7 +16,7 @@ public class PurchaseOrderMapperTests
     [Fact]
     public void Map_UsesCarrierDeliveryDateAndRemark_WhenPopulated()
     {
-        var deliveryDate = new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc);
+        var deliveryDate = DateTime.UtcNow.Date.AddDays(30); // future: past dates are moved up to now
         var po = new LocalPurchaseOrder
         {
             PurchaseNumber = 2200,
