@@ -7,7 +7,10 @@ namespace NeroTrade.JDIntegration.Services.Alerts;
 
 public interface ICustomerAlertSender
 {
-    /// <param name="toOverride">Recipients to use instead of the configured <c>CustomerAlerts:To</c> (test mails).</param>
+    /// <param name="toOverride">
+    /// Recipients to use instead of the configured <c>CustomerAlerts:To</c> (test mails). <c>CustomerAlerts:Bcc</c>
+    /// is not added then, so a test goes only where it was asked to.
+    /// </param>
     Task SendAsync(string subject, string textBody, CancellationToken cancellationToken, IReadOnlyList<string>? toOverride = null);
 }
 
@@ -16,18 +19,27 @@ public sealed class ResendAlertSender(HttpClient http, CustomerAlertOptions opti
 {
     public async Task SendAsync(string subject, string textBody, CancellationToken cancellationToken, IReadOnlyList<string>? toOverride = null)
     {
-        var to = toOverride is { Count: > 0 }
-            ? toOverride.ToArray()
-            : options.To!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.resend.com/emails")
-        {
-            Content = new StringContent(
-                JsonSerializer.Serialize(new { from = options.From, to, subject, text = textBody }),
-                Encoding.UTF8, "application/json")
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ResendApiKey);
-
+        using var request = BuildRequest(options, subject, textBody, toOverride);
         using var response = await http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
+
+    internal static HttpRequestMessage BuildRequest(CustomerAlertOptions options, string subject, string textBody, IReadOnlyList<string>? toOverride = null)
+    {
+        var isOverride = toOverride is { Count: > 0 };
+        var to = isOverride ? toOverride!.ToArray() : SplitAddresses(options.To);
+        var bcc = isOverride ? Array.Empty<string>() : SplitAddresses(options.Bcc);
+        object payload = bcc.Length > 0
+            ? new { from = options.From, to, bcc, subject, text = textBody }
+            : new { from = options.From, to, subject, text = textBody };
+        var request = new HttpRequestMessage(HttpMethod.Post, "https://api.resend.com/emails")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ResendApiKey);
+        return request;
+    }
+
+    private static string[] SplitAddresses(string? value) =>
+        (value ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }

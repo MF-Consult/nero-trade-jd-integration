@@ -83,6 +83,7 @@ if (!string.IsNullOrWhiteSpace(supabaseBaseUrl) && !string.IsNullOrWhiteSpace(su
         ResendApiKey = alertSection["ResendApiKey"],
         From = alertSection["From"],
         To = alertSection["To"],
+        Bcc = alertSection["Bcc"],
         DedupHours = int.TryParse(alertSection["DedupHours"], out var dedupHours) ? dedupHours : 24
     };
     if (customerAlerts.IsComplete)
