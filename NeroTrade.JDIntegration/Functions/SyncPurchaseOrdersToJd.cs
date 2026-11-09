@@ -123,7 +123,8 @@ public sealed class SyncPurchaseOrdersToJd(
                 CorrelationId = logScope.CorrelationId,
                 ErrorCode = "UNICONTA_LOOKUP_MISS",
                 Retryable = false,
-                SuggestedAction = "Check the item number on the purchase order line; create the item in Uniconta."
+                SuggestedAction = "Check the item number on the purchase order line; create the item in Uniconta.",
+                AlertSubject = CustomerAlertSubject.CatalogItem
             }, ct);
         }
 
@@ -150,7 +151,9 @@ public sealed class SyncPurchaseOrdersToJd(
                 CorrelationId = logScope.CorrelationId,
                 ErrorCode = "JD_VALIDATION_REJECTED",
                 Retryable = false,
-                SuggestedAction = "Complete the item master data in Uniconta (name, weight, country) and resend the purchase order."
+                SuggestedAction = "Complete the item master data in Uniconta (name, weight, country) and resend the purchase order.",
+                AlertSubject = CustomerAlertSubject.CatalogItem,
+                AlertReason = failure.Message
             }, ct);
         }
     }
@@ -231,7 +234,9 @@ public sealed class SyncPurchaseOrdersToJd(
                 CorrelationId = logScope.CorrelationId,
                 ErrorCode = "JD_VALIDATION_REJECTED",
                 Retryable = false,
-                SuggestedAction = "Manual review — PO marked Manuel handling in Uniconta with the JD reject reason."
+                SuggestedAction = "Manual review — PO marked Manuel handling in Uniconta with the JD reject reason.",
+                AlertSubject = CustomerAlertSubject.PurchaseOrder,
+                AlertReason = failure.Message
             }, ct);
         }
 

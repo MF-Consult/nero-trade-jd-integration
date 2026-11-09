@@ -136,7 +136,9 @@ public sealed class SyncItemsToJd(
                 CorrelationId = logScope.CorrelationId,
                 ErrorCode = "JD_VALIDATION_REJECTED",
                 Retryable = false,
-                SuggestedAction = "Inspect item mapping — JD rejected the catalog payload."
+                SuggestedAction = "Inspect item mapping — JD rejected the catalog payload.",
+                AlertSubject = CustomerAlertSubject.CatalogItem,
+                AlertReason = failure.Message
             }, ct);
         }
 

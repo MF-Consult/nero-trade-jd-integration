@@ -153,7 +153,9 @@ public sealed class SyncPostedPurchaseInvoicesToJd(
                 CorrelationId = logScope.CorrelationId,
                 ErrorCode = "JD_VALIDATION_REJECTED",
                 Retryable = false,
-                SuggestedAction = "Manual review — posted invoice marked Manuel handling. Fix the JD catalog item, then re-set Overfør til JD on the invoice."
+                SuggestedAction = "Manual review — posted invoice marked Manuel handling. Fix the JD catalog item, then re-set Overfør til JD on the invoice.",
+                AlertSubject = CustomerAlertSubject.PostedPurchaseInvoice,
+                AlertReason = failure.Message
             }, ct);
         }
 

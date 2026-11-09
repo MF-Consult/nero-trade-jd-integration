@@ -95,7 +95,8 @@ if (!string.IsNullOrWhiteSpace(supabaseBaseUrl) && !string.IsNullOrWhiteSpace(su
             sp.GetRequiredService<SupabaseIntegrationLogger>(),
             sp.GetRequiredService<ICustomerAlertSender>(),
             sp.GetRequiredService<CustomerAlertOptions>(),
-            sp.GetRequiredService<ILogger<CustomerAlertingLogger>>()));
+            sp.GetRequiredService<ILogger<CustomerAlertingLogger>>(),
+            autoCreateMissingItems: sp.GetRequiredService<PurchaseOrderSyncOptions>().AutoCreateMissingItems));
     }
     else
     {

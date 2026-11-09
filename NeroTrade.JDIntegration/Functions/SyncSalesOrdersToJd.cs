@@ -303,7 +303,9 @@ public sealed class SyncSalesOrdersToJd(
                 CorrelationId = logScope.CorrelationId,
                 ErrorCode = "JD_VALIDATION_REJECTED",
                 Retryable = false,
-                SuggestedAction = "Manual review — Uniconta SO has been marked Fejlet with the JD reject reason."
+                SuggestedAction = "Manual review — Uniconta SO has been marked Fejlet with the JD reject reason.",
+                AlertSubject = CustomerAlertSubject.SalesOrder,
+                AlertReason = failure.Message
             }, ct);
         }
 
