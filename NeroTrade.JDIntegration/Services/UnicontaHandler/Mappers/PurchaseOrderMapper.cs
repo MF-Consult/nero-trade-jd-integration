@@ -5,6 +5,18 @@ using NeroTrade.JDIntegration.Services.UnicontaHandler.Models;
 
 public sealed class PurchaseOrderMapper
 {
+    /// <summary>
+    /// JD rejects a shipment dated before today ("'Date' must be greater than or equal to today").
+    /// A blank date falls back to now + 2 days; a date in the past is moved up to "as soon as
+    /// possible" (now, +2 h so it is also "today" in Danish time when UTC is still the day before).
+    /// </summary>
+    internal static DateTime ResolveDate(DateTime? deliveryDate)
+    {
+        if (deliveryDate is null) return DateTime.UtcNow.AddDays(2);
+        var earliest = DateTime.UtcNow.AddHours(2);
+        return deliveryDate.Value.Date < earliest.Date ? earliest : deliveryDate.Value;
+    }
+
     public JdIncomingShipmentCreate Map(LocalPurchaseOrder po) =>
         BuildIncomingShipment(
             po.PurchaseNumber,
@@ -47,7 +59,7 @@ public sealed class PurchaseOrderMapper
     {
         var create = new JdIncomingShipmentCreate
         {
-            date = deliveryDate ?? DateTime.UtcNow.AddDays(2),
+            date = ResolveDate(deliveryDate),
             // "PO {n}" is the machine key parsed back out via JdOrderHelper (dedup and
             // received-quantity sync) — the remark may only ever be appended after it.
             text = string.IsNullOrWhiteSpace(remarkText)

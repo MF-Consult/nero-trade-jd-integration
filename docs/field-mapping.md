@@ -88,7 +88,7 @@ A service sent to a product that does not list it makes JD reject the whole requ
 
 | JD field (Til) | Uniconta source (Fra) — UI label / field | `LocalPurchaseOrder` | Transform rule |
 |---|---|---|---|
-| `date` | **Leveringsdato** (`_DeliveryDate`) | `DeliveryDate` | Fallback `now + 2 days` if blank. |
+| `date` | **Leveringsdato** (`_DeliveryDate`) | `DeliveryDate` | Fallback `now + 2 days` if blank. **If the date is in the past** (before today), it is moved up to *as soon as possible* = now (+2 h, so it is also today in Danish time) — JD rejects past dates. Applies to open orders and the posted-invoice safety-net alike. |
 | `text` | **Bemærkning til JD** (`xRemarksForJD`) | `RemarkText` | `"PO {PurchaseNumber}"` if blank; else `"PO {n} - {remark}"` (trimmed). `PO {n}` key **always leads**. |
 | `carrier` | **Speditør** (`xCarrier`) | `Carrier` | `"TBD"` if blank. |
 | `notificationEmails` | — | — | Hardcoded `"mb@nerotrade.dk"`. |
@@ -151,6 +151,8 @@ All write-backs go through `UnicontaService` and are **skipped under DryRun** (s
 ## Changelog
 
 Add a dated entry for **every** mapping change. Newest first.
+
+- **2026-11-09** — Purchase-order `date`: a Leveringsdato **in the past** is now moved up to *as soon as possible* (now + 2 h) instead of being sent as-is (blank still falls back to now + 2 days). Trigger: PO 98 was rejected by JD (`JD_VALIDATION_REJECTED`: "'Date' must be greater than or equal to 09/11/2026"). Requested by Mark.
 
 - **2026-09-29** — Purchase lines: **cost items are excluded** from the JD incoming shipment via a static list (`Constants/NonWarehouseItems.cs`): `PRINTPLA` (printplader), `Forud` (forudbetalinger), `1200` "Cargo - Internal" and `7` "Cargo Transport" (transport; all four are type *Ydelse* in Uniconta) — agreed with Maiwand (Nero Trade) the same day. Trigger: PO 26 was rejected in full (`JD_VALIDATION_REJECTED`, "No matching JD catalog item for SKU(s): PRINTPLA, Forud"), because the **open-order** path sent every line with an item number, while the posted-invoice path already kept only group `Stock`. Applied in the repository projections of both paths (so `/inspect` shows it too); exact, case-insensitive match on item number, stored line text (`_Text`) or item name. Name matching is best-effort — the SDK's `Text`/item-name getters need the client item cache (without it they return null or throw, so the raw `_Text` field is read and the name getter is guarded) — so add the **item number** of any new cost item. A real stock item missing from JD still fails the shipment loudly, unchanged.
 - **2026-09-28** — **Country → ISO alpha-2** for catalog items (`producedInCountryCode` ← varens **Oprindelsesland**, `CountryOfOrigin`), debtors (`countryCode`) and sales-order delivery addresses (`address.countryCode`). The repository used `CountryCode.ToString()`, which is the enum **name** ("Türkiye", "UnitedKingdom"), and `CountryHelper`'s fallback passed any name outside its ~30-country table through as the code — item TRBFTELIPWW610 (Türkiye) reached JD as `"TÜRKIYE"` and was rejected (`JD_VALIDATION_REJECTED`: must be 2 characters). Multi-word countries (`UnitedKingdom`, `UnitedStates`) never matched the table either. Fix: new `UnicontaCountry.ToIsoCode` maps via the SDK's `CountryISOCode` enum (same ordinals; all 248 countries verified, Guadeloupe special-cased to `GP`); `CountryHelper` now passes an unknown two-letter code through and never returns a name as the code. Item/debtor defaults unchanged (`"DK"` when Land/Oprindelsesland is empty).
