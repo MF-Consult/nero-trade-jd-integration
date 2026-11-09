@@ -2,7 +2,7 @@ namespace NeroTrade.JDIntegration.Models.Settings;
 
 /// <summary>
 /// Plain-language error mails to the customer, sent through Resend. Bound from the <c>CustomerAlerts</c>
-/// section (env: <c>CustomerAlerts__Enabled</c>, <c>__ResendApiKey</c>, <c>__From</c>, <c>__To</c>).
+/// section (env: <c>CustomerAlerts__Enabled</c>, <c>__ResendApiKey</c>, <c>__From</c>, <c>__To</c>, <c>__Bcc</c>).
 /// Off by default: the logging pipeline is only wrapped when <see cref="Enabled"/> is true, so with the switch
 /// off nothing about the existing logging changes.
 /// </summary>
@@ -20,6 +20,12 @@ public sealed class CustomerAlertOptions
 
     /// <summary>Recipients, comma-separated.</summary>
     public string? To { get; init; }
+
+    /// <summary>
+    /// Optional hidden recipients, comma-separated, e.g. ourselves while the mails are new. Never shown to the
+    /// <see cref="To"/> recipients, and not used for test mails sent to an explicit address.
+    /// </summary>
+    public string? Bcc { get; init; }
 
     /// <summary>The same problem (same code + same order/item) is mailed at most once in this window.</summary>
     public int DedupHours { get; init; } = 24;
