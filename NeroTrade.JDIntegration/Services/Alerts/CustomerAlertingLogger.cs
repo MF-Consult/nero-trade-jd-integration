@@ -17,7 +17,8 @@ public sealed class CustomerAlertingLogger(
     ICustomerAlertSender sender,
     CustomerAlertOptions options,
     ILogger<CustomerAlertingLogger> logger,
-    Func<DateTime>? utcNow = null) : IIntegrationLogger
+    Func<DateTime>? utcNow = null,
+    bool autoCreateMissingItems = false) : IIntegrationLogger
 {
     // Process-wide so the dedup survives the per-invocation logger instances.
     private static readonly ConcurrentDictionary<string, DateTime> LastSent = new();
@@ -43,7 +44,7 @@ public sealed class CustomerAlertingLogger(
         try
         {
             if (!options.IsComplete) return;
-            var alert = CustomerAlertFormatter.TryFormat(entry);
+            var alert = CustomerAlertFormatter.TryFormat(entry, autoCreateMissingItems);
             if (alert is null) return;
 
             var now = _utcNow();

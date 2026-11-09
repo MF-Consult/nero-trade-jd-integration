@@ -67,4 +67,23 @@ public sealed record IntegrationLogEntry(
 
     /// <summary>Surfaces run_name into payload.run_name on started/completion rows for the integration_runs view.</summary>
     public string? RunName { get; init; }
+
+    /// <summary>
+    /// What <see cref="ExternalId"/> refers to, from the customer's point of view. Set only on rows that mean
+    /// "this was not sent to JD and the customer can fix it" — that is the opt-in for a customer error mail
+    /// (see <c>CustomerAlertFormatter</c>). Not persisted to Supabase.
+    /// </summary>
+    public CustomerAlertSubject? AlertSubject { get; init; }
+
+    /// <summary>The bare reject reason (JD's own text, not our log sentence), for the customer mail. Not persisted.</summary>
+    public string? AlertReason { get; init; }
+}
+
+/// <summary>The kind of record a customer error mail is about.</summary>
+public enum CustomerAlertSubject
+{
+    SalesOrder,
+    PurchaseOrder,
+    PostedPurchaseInvoice,
+    CatalogItem,
 }
