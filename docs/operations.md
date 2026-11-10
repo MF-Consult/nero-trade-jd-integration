@@ -271,8 +271,9 @@ event. Register once (JD API, `Authorization: Bearer <key>`):
 
 ```http
 POST https://api.jdlogistik.dk/api/webhooks
-{ "types": [0,1,2,3,30,31,32], "urlAddress": "https://nero-trade-data-syncer.azurewebsites.net/api/jd/webhook" }
+{ "types": [0,1,2,3,30,31,32], "urlAddress": "https://nero-trade-data-syncer-d5apejcef0ahbpge.westeurope-01.azurewebsites.net/api/jd/webhook" }
 ```
+**Use the app's real default hostname** (Function App → Overview → Default domain). The app is Flex Consumption, so its host carries a suffix; plain `nero-trade-data-syncer.azurewebsites.net` does not resolve. Webhook 27 was registered on that wrong host on 2026-11-06, every call failed with a DNS error, and JD deactivated it after 100 attempts on 2026-11-10; fixed and reactivated the same day.
 → put the returned `secret` in `JdWebhook__Secret`. Only after events are seen arriving (look for the
 `JD webhook … accepted` log lines) slow `RequestOrderStatus` / `ReceivedQuantity` in `SyncScheduling`; the
 calls saved fund a faster Uniconta→JD cadence. JD source IPs (per its docs): 13.74.38.39, 13.79.81.45.
