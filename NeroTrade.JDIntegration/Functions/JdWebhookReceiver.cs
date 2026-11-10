@@ -22,7 +22,7 @@ namespace NeroTrade.JDIntegration.Functions;
 /// Auth: anonymous at the Functions level, authenticated by JD's <c>X-JD-Hash</c> HMAC (see
 /// <see cref="JdWebhookSignature"/>). With no <c>JdWebhook__Secret</c> configured every call gets 401.
 /// Register once with <c>POST /api/webhooks</c> (types from <see cref="JdWebhookRouter.SubscribedTypes"/>,
-/// url = <c>https://nero-trade-data-syncer.azurewebsites.net/api/jd/webhook</c>) and store the returned secret.
+/// url = <c>https://nero-trade-data-syncer-d5apejcef0ahbpge.westeurope-01.azurewebsites.net/api/jd/webhook</c>) and store the returned secret.
 /// </summary>
 public sealed class JdWebhookReceiver(
     SyncScheduler scheduler,
