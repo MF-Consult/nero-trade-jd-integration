@@ -20,6 +20,13 @@ public sealed class SyncReceivedQuantityToUniconta(
     IIntegrationLogger integrationLogger,
     ILogger<SyncReceivedQuantityToUniconta> logger)
 {
+    // Shipments (id -> modifiedOn) already written to Uniconta without error. The 24 h lookback window keeps a
+    // completed shipment in view for ~48 ticks; without this, every tick re-read the PO, re-wrote its header and
+    // lines and logged "registered from JD" + a false JD_WEBHOOK_MISSED each time (PO 98, 2026-11-11). A shipment
+    // JD modifies again has a new modifiedOn and is processed again. In-memory by design (single instance);
+    // a restart simply re-applies once, which is idempotent.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, DateTime> ProcessedShipments = new();
+
     // Invoked by SyncDispatcher, not by its own timer — see that class. The scheduler gate below
     // still decides whether this tick does any work, so the configured cadence is unchanged.
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -58,6 +65,12 @@ public sealed class SyncReceivedQuantityToUniconta(
             {
                 if (!summary.id.HasValue) continue;
 
+                if (ProcessedShipments.TryGetValue(summary.id.Value, out var processedModifiedOn)
+                    && processedModifiedOn == summary.modifiedOn)
+                {
+                    continue;
+                }
+
                 // Parse PO number from text field "PO {number}"
                 int purchaseNumber = JdOrderHelper.GetPurchaseOrderNumber(summary.text);
 
@@ -91,6 +104,7 @@ public sealed class SyncReceivedQuantityToUniconta(
                     logger.LogInformation(
                         "PO {Po} is booked; received quantity is already in Uniconta's books. Set JD status on the posted invoice instead.",
                         purchaseNumber);
+                    if (summary.modifiedOn.HasValue) ProcessedShipments[summary.id.Value] = summary.modifiedOn.Value;
                     skippedCount++;
                     continue;
                 }
@@ -126,6 +140,7 @@ public sealed class SyncReceivedQuantityToUniconta(
                 logger.LogInformation("Processing PO {Po} (Shipment {Id}) with {Count} registered SKUs", purchaseNumber, shipment.id, quantitiesBySku.Count);
 
                 bool poUpdated = false;
+                bool shipmentFailed = false;
 
                 foreach (var (sku, receivedQty) in quantitiesBySku)
                 {
@@ -144,6 +159,7 @@ public sealed class SyncReceivedQuantityToUniconta(
                     {
                         logger.LogError("Failed to sync line {Sku} for PO {Po}", sku, purchaseNumber);
                         errorCount++;
+                        shipmentFailed = true;
                         await integrationLogger.LogAsync(new IntegrationLogEntry(
                             integrationLogger.IntegrationName, "error", "Uniconta", purchaseNumber.ToString(),
                             $"Failed to update received quantity for SKU {sku} on PO {purchaseNumber}.", null,
@@ -160,6 +176,10 @@ public sealed class SyncReceivedQuantityToUniconta(
                         poUpdated = true;
                     }
                 }
+
+                // Remember a cleanly applied shipment so the next ticks inside the lookback window skip it.
+                if (!shipmentFailed && summary.modifiedOn.HasValue)
+                    ProcessedShipments[summary.id.Value] = summary.modifiedOn.Value;
 
                 if (poUpdated)
                 {
